@@ -202,7 +202,7 @@
 	"/usr/lib32"
       ]
     },
-    "file-name": "FreeNAS-12-unstable-x64-%%DATE%%",
+    "file-name": "FreeNAS-12-snapshot-x64-%%DATE%%",
     "install-script": "",
     "iso-packages": {
       "default": [ ]
@@ -292,7 +292,7 @@
       "AxxsOeRYAlBFJ4oo2cFVyqkCAwEAAQ==",
       "-----END PUBLIC KEY-----"
     ],
-    "url": "https://pkg.trueos.org/pkg/freenas/12/unstable"
+    "url": "https://pkg.trueos.org/pkg/freenas/12/${ABI}/latest"
   },
   "ports": {
     "branch": "freenas/12-stable",
