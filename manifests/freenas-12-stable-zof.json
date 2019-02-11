@@ -164,6 +164,7 @@
         "sysutils/uefi-edk2-bhyve-csm",
         "sysutils/vm-bhyve",
         "sysutils/zfs-stats-lite",
+        "sysutils/zol",
         "textproc/jq",
         "www/apache24",
         "www/dojo",
@@ -202,7 +203,7 @@
 	"/usr/lib32"
       ]
     },
-    "file-name": "FreeNAS-12-snapshot-x64-%%DATE%%",
+    "file-name": "FreeNAS-12-snapshot-zof-x64-%%DATE%%",
     "install-script": "",
     "iso-packages": {
       "default": [ ]
@@ -292,7 +293,7 @@
       "AxxsOeRYAlBFJ4oo2cFVyqkCAwEAAQ==",
       "-----END PUBLIC KEY-----"
     ],
-    "url": "https://pkg.trueos.org/pkg/freenas/12/snapshot/${ABI}/latest"
+    "url": "https://pkg.trueos.org/pkg/freenas/12/snapshot-zof/${ABI}/latest"
   },
   "ports": {
     "branch": "freenas/12-stable",
@@ -376,10 +377,12 @@
         "net-mgmt_collectd5_SET+=STATGRAB",
         "net-mgmt_collectd5_UNSET+=BIND",
         "net-mgmt_collectd5_UNSET+=SNMP",
+	"os_buildkernel_UNSET+=ZFS",
 	"os_buildworld_UNSET+=BLUETOOTH",
 	"os_buildworld_UNSET+=BSDINSTALL",
 	"os_buildworld_UNSET+=PPP",
 	"os_buildworld_UNSET+=SVNLITE",
+	"os_buildworld_UNSET+=ZFS",
         "security_openssh-portable_SET+=HEIMDIAL_BASE",
         "security_openssh-portable_SET+=NONECIPHER",
         "security_openssh-portable_SET+=HPN",
