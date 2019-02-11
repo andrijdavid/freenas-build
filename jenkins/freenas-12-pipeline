@@ -1,7 +1,7 @@
 /*
 
 Our default Jenkins pipeline we use to create our on-commit
-snapshot builds of trueos-master branch.
+snapshot builds of FreeNAS 12 branch.
 
 */
 
@@ -11,9 +11,9 @@ pipeline {
   environment {
     GH_ORG = 'trueos'
     GH_REPO = 'trueos'
-    POUDRIERE_BASE = 'trueos-snap-base'
-    POUDRIERE_PORTS = 'trueos-snap-ports'
-    TRUEOS_VERSION = '13.0'
+    POUDRIERE_BASE = 'freenas12-base'
+    POUDRIERE_PORTS = 'freenas12-ports'
+    TRUEOS_VERSION = '12.0'
   }
 
   stages {
@@ -31,7 +31,7 @@ pipeline {
       }
       environment {
          SIGNING_KEY = credentials('a50f9ddd-1460-4951-a304-ddbf6f2f7990')
-	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/trueos-snapshot.json"
+	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/freenas-12-stable.json"
       }
       steps {
         sh 'make ports'
@@ -45,7 +45,7 @@ pipeline {
       }
       environment {
          SIGNING_KEY = credentials('a50f9ddd-1460-4951-a304-ddbf6f2f7990')
-	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/trueos-snapshot.json"
+	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/freenas-12-stable.json"
       }
       steps {
         sh 'make iso'
@@ -54,10 +54,10 @@ pipeline {
     stage('Publish') {
       steps {
         sshagent (credentials: ['syncbot-credentials']) {
-          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null syncbot@pkg.trueos.org mkdir -p /data/pkg/snapshot/FreeBSD:13:amd64/latest || true'
-          sh 'cd release/packages && rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" . syncbot@pkg.trueos.org:/data/pkg/snapshot/FreeBSD:13:amd64/latest/'
-          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null syncbot@pkg.trueos.org mkdir -p /data/iso/snapshot/ || true'
-          sh 'rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" release/iso/ syncbot@pkg.trueos.org:/data/iso/snapshot/'
+          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null syncbot@pkg.trueos.org mkdir -p /data/pkg/freenas/12/FreeBSD:12:amd64/latest || true'
+          sh 'cd release/packages && rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" . syncbot@pkg.trueos.org:/data/pkg/freenas/12/FreeBSD:12:amd64/latest/'
+          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null syncbot@pkg.trueos.org mkdir -p /data/iso/freenas/12/snapshot || true'
+          sh 'rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" release/iso/ syncbot@pkg.trueos.org:/data/iso/freenas/12/snapshot'
         }
       }
     }
