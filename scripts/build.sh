@@ -72,6 +72,7 @@ POUDRIERE_JAILDIR="${POUDRIERE_BASEFS}/jails/${POUDRIERE_BASE}"
 POUDRIERE_PORTDIR="${POUDRIERE_BASEFS}/ports/${POUDRIERE_PORTS}"
 POUDRIERE_PKGDIR="${POUDRIERE_BASEFS}/data/packages/${POUDRIERE_BASE}-${POUDRIERE_PORTS}"
 POUDRIERE_LOGDIR="${POUDRIERE_BASEFS}/data/logs"
+POUDRIERE_PKGLOGS="${POUDRIERE_LOGDIR}/bulk/${POUDRIERE_BASE}-${POUDRIERE_PORTS}"
 POUDRIERED_DIR=/usr/local/etc/poudriere.d
 
 # Temp location for ISO files
@@ -111,11 +112,18 @@ setup_poudriere_conf()
 {
 	echo "Creating poudriere configuration"
 	ZPOOL=$(mount | grep 'on / ' | cut -d '/' -f 1)
-	_pdconf="${POUDRIERED_DIR}/${POUDRIERE_BASE}-poudriere.conf"
-	_pdconf2="${POUDRIERED_DIR}/${POUDRIERE_PORTS}-poudriere.conf"
+	_pdconf="${POUDRIERED_DIR}/${POUDRIERE_PORTS}-poudriere.conf"
 
 	if [ ! -d "${POUDRIERED_DIR}" ] ; then
 		mkdir -p ${POUDRIERED_DIR}
+	fi
+
+	# Setup the zpool on the default poudriere.conf if necessary
+	# This is so the user can run regular poudriere commands on these
+	# builds for testing and development
+	grep -q "^ZPOOL=" /usr/local/etc/poudriere.conf
+	if [ $? -ne 0 ] ; then
+		echo "ZPOOL=$ZPOOL" >> /usr/local/etc/poudriere.conf
 	fi
 
 	# Copy the systems poudriere.conf over
@@ -152,9 +160,6 @@ setup_poudriere_conf()
 		cat /etc/poudriere.conf.release >> ${_pdconf}
 	fi
 
-	# Need config for the ports tree also
-	cp ${_pdconf} ${_pdconf2} 2>/dev/null
-
 }
 
 # We don't need to store poudriere data in our checked out location
@@ -169,7 +174,7 @@ create_release_links()
 	rm release/src-logs >/dev/null 2>/dev/null
 	ln -fs ${POUDRIERE_LOGDIR}/base-ports release/src-logs
 	rm release/port-logs >/dev/null 2>/dev/null
-	ln -fs ${POUDRIERE_LOGDIR}/bulk/${POUDRIERE_BASE}-${POUDRIERE_PORTS} release/port-logs
+	ln -fs ${POUDRIERE_PKGLOGS} release/port-logs
 }
 
 # Called to import the ports tree into poudriere specified in MANIFEST
@@ -178,14 +183,50 @@ setup_poudriere_ports()
 	# Delete previous ports tree
 	poudriere ports -l | grep -q -w ${POUDRIERE_PORTS}
 	if [ $? -eq 0 ]; then
-		echo "Removing previous poudriere ports tree"
-		echo -e "y\n" | poudriere ports -d -p ${POUDRIERE_PORTS}
+		echo "Updating previous poudriere ports tree"
+		poudriere ports -u -p ${POUDRIERE_PORTS}
+		if [ $? -ne 0 ] ; then
+			echo "Failed updating, checking out ports fresh"
+			echo -e "y\n" | poudriere ports -d -p ${POUDRIERE_PORTS}
+			create_poudriere_ports
+		fi
+	else
+		create_poudriere_ports
 	fi
 
-	# Make sure the various /tmp(s) will work for poudriere
-	#chmod 777 ${JDIR}/tmp
-	#chmod -R 777 ${JDIR}/var/tmp
+	# Do we have any locally checked out sources to copy into poudirere jail?
+	LOCAL_SOURCE_DIR=source
+	if [ -n "$LOCAL_SOURCE_DIR" -a -d "${LOCAL_SOURCE_DIR}" ] ; then
+		rm -rf ${POUDRIERE_PORTDIR}/local_source 2>/dev/null
+		cp -a ${LOCAL_SOURCE_DIR} ${POUDRIERE_PORTDIR}/local_source
+		if [ $? -ne 0 ] ; then
+			exit_err "Failed copying ${LOCAL_SOURCE_DIR} -> ${POUDRIERE_PORTDIR}/local_source"
+		fi
+	fi
 
+	# Add any list of files to strip from port plists
+	# Verify we have anything to strip in our MANIFEST
+	if [ "$(jq -r '."base-packages"."strip-plist" | length' $TRUEOS_MANIFEST)" != "0" ] ; then
+		jq -r '."base-packages"."strip-plist" | join("\n")' $TRUEOS_MANIFEST > ${POUDRIERE_PORTDIR}/strip-plist-ports
+	else
+		rm ${POUDRIERE_PORTDIR}/strip-plist-ports >/dev/null 2>/dev/null
+	fi
+
+
+	rm ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf 2>/dev/null 2>/dev/null
+	for c in $(jq -r '."ports"."make.conf" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
+	do
+		eval "CHECK=\$$c"
+		if [ -z "$CHECK" -a "$c" != "default" ] ; then continue; fi
+
+		# We have a conditional set of packages to include, lets do it
+		jq -r '."ports"."make.conf"."'$c'" | join("\n")' ${TRUEOS_MANIFEST} >>${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
+	done
+
+}
+
+create_poudriere_ports()
+{
 	# Create the new ports tree
 	echo "Creating poudriere ports tree"
 	if [ "$PORTS_TYPE" = "git" ] ; then
@@ -228,53 +269,67 @@ setup_poudriere_ports()
 		# This is used for checking essential packages later
 		POUDRIERE_PORTDIR=${PORTS_URL}
 	fi
+}
 
-	# Do we have any locally checked out sources to copy into poudirere jail?
-	LOCAL_SOURCE_DIR=source
-	if [ -n "$LOCAL_SOURCE_DIR" -a -d "${LOCAL_SOURCE_DIR}" ] ; then
-		rm -rf ${POUDRIERE_PORTDIR}/local_source 2>/dev/null
-		cp -a ${LOCAL_SOURCE_DIR} ${POUDRIERE_PORTDIR}/local_source
-		if [ $? -ne 0 ] ; then
-			exit_err "Failed copying ${LOCAL_SOURCE_DIR} -> ${POUDRIERE_PORTDIR}/local_source"
-		fi
+is_jail_dirty()
+{
+	poudriere jail -l | grep -q -w "${POUDRIERE_BASE}"
+	if [ $? -ne 0 ] ; then
+		return 1
 	fi
 
-	# Add any list of files to strip from port plists
-	# Verify we have anything to strip in our MANIFEST
-	if [ "$(jq -r '."base-packages"."strip-plist" | length' $TRUEOS_MANIFEST)" != "0" ] ; then
-		jq -r '."base-packages"."strip-plist" | join("\n")' $TRUEOS_MANIFEST > ${POUDRIERE_PORTDIR}/strip-plist-ports
-	else
-		rm ${POUDRIERE_PORTDIR}/strip-plist-ports >/dev/null 2>/dev/null
+	echo "Checking existing jail"
+
+	# Check if we need to build the jail - skip if existing pkg is updated
+	pkgName=$(make -C ${POUDRIERE_PORTDIR}/os/src -V PKGNAME PORTSDIR=${POUDRIERE_PORTDIR} __MAKE_CONF=${OBJDIR}/poudriere.d/${POUDRIERE_BASE}}-make.conf)
+	echo "Looking for ${POUDRIERE_PKGDIR}/All/${pkgName}.txz"
+	if [ ! -e "${POUDRIERE_PKGDIR}/All/${pkgName}.txz" ] ; then
+		echo "Different os/src detected for ${POUDRIERE_BASE} jail"
+		return 1
 	fi
 
+	# Do our options files exist?
+	if [ ! -e "${POUDRIERE_PKGDIR}/buildworld.options" ] ; then
+		return 1
+	fi
+	if [ ! -e "${POUDRIERE_PKGDIR}/buildkernel.options" ] ; then
+		return 1
+	fi
 
-	rm ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf 2>/dev/null 2>/dev/null
-	for c in $(jq -r '."ports"."make.conf" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
-	do
-		eval "CHECK=\$$c"
-		if [ -z "$CHECK" -a "$c" != "default" ] ; then continue; fi
+	# Have the world options changed?
+	newOpt=$(get_world_flags | md5)
+	oldOpt=$(cat ${POUDRIERE_PKGDIR}/buildworld.options | md5)
+	if [ "${newOpt}" != "${oldOpt}" ] ;then
+		return 1
+	fi
+	# Have the kernel options changed?
+	newOpt=$(get_kernel_flags | md5)
+	oldOpt=$(cat ${POUDRIERE_PKGDIR}/buildkernel.options | md5)
+	if [ "${newOpt}" != "${oldOpt}" ] ;then
+		return 1
+	fi
+	# Have the os port options changed?
+	newOpt=$(get_os_port_flags | md5)
+	oldOpt=$(cat ${POUDRIERE_PKGDIR}/osport.options | md5)
+	if [ "${newOpt}" != "${oldOpt}" ] ;then
+		return 1
+	fi
 
-		# We have a conditional set of packages to include, lets do it
-		jq -r '."ports"."make.conf"."'$c'" | join("\n")' ${TRUEOS_MANIFEST} >>${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
-	done
-
+	# Jail is sane!
+	return 0
 }
 
 # Checks if we have a new base ports jail to build, if so we will rebuild it
 setup_poudriere_jail()
 {
+	is_jail_dirty
+	if [ $? -eq 0 ] ; then
+		# Jail is updated, we can skip build
+		return 0
+	fi
+
 	poudriere jail -l | grep -q -w "${POUDRIERE_BASE}"
 	if [ $? -eq 0 ] ; then
-		echo "Checking existing jail"
-
-		# Check if we need to build the jail - skip if existing pkg is updated
-		pkgName=$(make -C ${POUDRIERE_PORTDIR}/os/src -V PKGNAME PORTSDIR=${POUDRIERE_PORTDIR} __MAKE_CONF=${OBJDIR}/poudriere.d/${POUDRIERE_BASE}}-make.conf)
-		echo "Looking for ${POUDRIERE_PKGDIR}/All/${pkgName}.txz"
-		if [ -e "${POUDRIERE_PKGDIR}/All/${pkgName}.txz" ] ; then
-			echo "Using existing ${POUDRIERE_BASE} jail"
-			return 0
-		fi
-
 		# Remove old version
 		echo -e "y\n" | poudriere jail -d -j ${POUDRIERE_BASE}
 	fi
@@ -286,12 +341,21 @@ setup_poudriere_jail()
 		rm -r ${POUDRIERE_PKGDIR}/*
 	fi
 
+	# Clean out old logs
+	rm ${POUDRIERE_LOGDIR}/base-ports/*
+
 	export KERNEL_MAKE_FLAGS="$(get_kernel_flags)"
 	export WORLD_MAKE_FLAGS="$(get_world_flags)"
 	poudriere jail -c -j $POUDRIERE_BASE -m ports=${POUDRIERE_PORTS} -v ${TRUEOS_VERSION}
 	if [ $? -ne 0 ] ; then
 		exit 1
 	fi
+
+	# Save the options used for this build
+	echo "$WORLD_MAKE_FLAGS" > ${POUDRIERE_PKGDIR}/buildworld.options
+	echo "$KERNEL_MAKE_FLAGS" > ${POUDRIERE_PKGDIR}/buildkernel.options
+	OS_PORT=$(get_os_port_flags)
+	echo "$OS_PORT" > ${POUDRIERE_PKGDIR}/osport.options
 }
 
 # Scrape the MANIFEST for list of packages to build
@@ -795,6 +859,26 @@ check_build_environment()
 		echo "Missing compiler! Please install llvm first."
 		exit 1
 	fi
+}
+
+get_os_port_flags()
+{
+	# Check if we have any port-flags to pass back
+	for c in $(jq -r '."ports"."make.conf" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
+	do
+		eval "CHECK=\$$c"
+		if [ -z "$CHECK" -a "$c" != "default" ] ; then continue; fi
+		for i in $(jq -r '."ports"."make.conf"."'$c'" | join(" ")' ${TRUEOS_MANIFEST})
+		do
+			# Skip any non os_ flags
+			echo "$i" | grep -q "^os_"
+			if [ $? -ne 0 ] ; then
+				continue
+			fi
+			WF="$WF ${i}"
+		done
+	done
+	echo "$WF"
 }
 
 get_world_flags()
