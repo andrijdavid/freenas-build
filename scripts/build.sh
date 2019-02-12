@@ -43,8 +43,8 @@ exit_err()
 if [ -z "$TRUEOS_MANIFEST" ] ; then
 	if [ -e ".config/manifest" ] ; then
 		export TRUEOS_MANIFEST="$(pwd)/manifests/$(cat .config/manifest)"
-	elif [ -e "$(pwd)/manifests/trueos-snapshot.json" ] ; then
-		export TRUEOS_MANIFEST="$(pwd)/manifests/trueos-snapshot.json"
+	elif [ -e "$(pwd)/manifests/freenas-12-stable.json" ] ; then
+		export TRUEOS_MANIFEST="$(pwd)/manifests/freenas-12-stable.json"
 	fi
 fi
 
