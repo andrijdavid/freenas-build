@@ -113,6 +113,7 @@ setup_poudriere_conf()
 	echo "Creating poudriere configuration"
 	ZPOOL=$(mount | grep 'on / ' | cut -d '/' -f 1)
 	_pdconf="${POUDRIERED_DIR}/${POUDRIERE_PORTS}-poudriere.conf"
+	_pdconf2="${POUDRIERED_DIR}/${POUDRIERE_BASE}-poudriere.conf"
 
 	if [ ! -d "${POUDRIERED_DIR}" ] ; then
 		mkdir -p ${POUDRIERED_DIR}
@@ -159,7 +160,10 @@ setup_poudriere_conf()
 	if [ -e "/etc/poudriere.conf.release" ] ; then
 		cat /etc/poudriere.conf.release >> ${_pdconf}
 	fi
+	cp ${_pdconf} ${_pdconf2}
 
+	# Set the TRUEOS_MANIFEST location for os/* build ports
+	echo "TRUEOS_MANIFEST=${TRUEOS_MANIFEST}" > ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
 }
 
 # We don't need to store poudriere data in our checked out location
@@ -177,20 +181,40 @@ create_release_links()
 	ln -fs ${POUDRIERE_PKGLOGS} release/port-logs
 }
 
+is_ports_dirty()
+{
+	# Does ports tree already exist?
+	poudriere ports -l | grep -q -w ${POUDRIERE_PORTS}
+	if [ $? -ne 0 ]; then
+		return 1
+	fi
+
+	CURBRANCH=$(cd ${POUDRIERE_PORTDIR} && git branch | awk '{print $2}')
+	if [ -z "$CURBRANCH" ] ; then
+		return 1
+	fi
+
+	# Have we changed branches?
+	if [ "$CURBRANCH" != "${PORTS_BRANCH}" ] ; then
+		return 1
+	fi
+
+	# Looks like we are safe to try an in-place upgrade
+	echo "Updating previous poudriere ports tree"
+	poudriere ports -u -p ${POUDRIERE_PORTS}
+	if [ $? -ne 0 ] ; then
+		echo "Failed updating, checking out ports fresh"
+		echo -e "y\n" | poudriere ports -d -p ${POUDRIERE_PORTS}
+		return 1
+	fi
+	return 0
+}
+
 # Called to import the ports tree into poudriere specified in MANIFEST
 setup_poudriere_ports()
 {
-	# Delete previous ports tree
-	poudriere ports -l | grep -q -w ${POUDRIERE_PORTS}
-	if [ $? -eq 0 ]; then
-		echo "Updating previous poudriere ports tree"
-		poudriere ports -u -p ${POUDRIERE_PORTS}
-		if [ $? -ne 0 ] ; then
-			echo "Failed updating, checking out ports fresh"
-			echo -e "y\n" | poudriere ports -d -p ${POUDRIERE_PORTS}
-			create_poudriere_ports
-		fi
-	else
+	is_ports_dirty
+	if [ $? -ne 0 ] ; then
 		create_poudriere_ports
 	fi
 
@@ -213,7 +237,6 @@ setup_poudriere_ports()
 	fi
 
 
-	rm ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf 2>/dev/null 2>/dev/null
 	for c in $(jq -r '."ports"."make.conf" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
 	do
 		eval "CHECK=\$$c"
@@ -297,19 +320,20 @@ is_jail_dirty()
 	fi
 
 	# Have the world options changed?
-	newOpt=$(get_world_flags | md5)
+	newOpt=$(get_world_flags | tr -d ' ' | md5)
 	oldOpt=$(cat ${POUDRIERE_PKGDIR}/buildworld.options | md5)
 	if [ "${newOpt}" != "${oldOpt}" ] ;then
 		return 1
 	fi
 	# Have the kernel options changed?
-	newOpt=$(get_kernel_flags | md5)
+	newOpt=$(get_kernel_flags | tr -d ' ' | md5)
 	oldOpt=$(cat ${POUDRIERE_PKGDIR}/buildkernel.options | md5)
 	if [ "${newOpt}" != "${oldOpt}" ] ;then
 		return 1
 	fi
+
 	# Have the os port options changed?
-	newOpt=$(get_os_port_flags | md5)
+	newOpt=$(get_os_port_flags | tr -d ' ' | md5)
 	oldOpt=$(cat ${POUDRIERE_PKGDIR}/osport.options | md5)
 	if [ "${newOpt}" != "${oldOpt}" ] ;then
 		return 1
@@ -352,10 +376,9 @@ setup_poudriere_jail()
 	fi
 
 	# Save the options used for this build
-	echo "$WORLD_MAKE_FLAGS" > ${POUDRIERE_PKGDIR}/buildworld.options
-	echo "$KERNEL_MAKE_FLAGS" > ${POUDRIERE_PKGDIR}/buildkernel.options
-	OS_PORT=$(get_os_port_flags)
-	echo "$OS_PORT" > ${POUDRIERE_PKGDIR}/osport.options
+	get_kernel_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/buildkernel.options
+	get_world_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/buildworld.options
+	get_os_port_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/osport.options
 }
 
 # Scrape the MANIFEST for list of packages to build
