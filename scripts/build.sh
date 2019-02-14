@@ -111,7 +111,14 @@ env_check()
 setup_poudriere_conf()
 {
 	echo "Creating poudriere configuration"
-	ZPOOL=$(mount | grep 'on / ' | cut -d '/' -f 1)
+
+	# Check if a default ZPOOL has been setup in poudriere.conf and use that
+	DEFAULT_ZPOOL=$(grep "^ZPOOL=" /usr/local/etc/poudriere.conf | cut -d '=' -f 2)
+	if [ -n "${DEFAULT_ZPOOL}" ] ; then
+		ZPOOL="${DEFAULT_ZPOOL}"
+	else
+		ZPOOL=$(mount | grep 'on / ' | cut -d '/' -f 1)
+	fi
 	_pdconf="${POUDRIERED_DIR}/${POUDRIERE_PORTS}-poudriere.conf"
 	_pdconf2="${POUDRIERED_DIR}/${POUDRIERE_BASE}-poudriere.conf"
 
@@ -164,6 +171,9 @@ setup_poudriere_conf()
 
 	# Set the TRUEOS_MANIFEST location for os/* build ports
 	echo "TRUEOS_MANIFEST=${TRUEOS_MANIFEST}" > ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
+	# Save kernel/world flags as well
+	get_world_flags | sed 's|^ ||g' | tr -s ' ' '\n' >> ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
+	get_kernel_flags | sed 's|^ ||g' | tr -s ' ' '\n' >> ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
 }
 
 # We don't need to store poudriere data in our checked out location
@@ -304,7 +314,7 @@ is_jail_dirty()
 	echo "Checking existing jail"
 
 	# Check if we need to build the jail - skip if existing pkg is updated
-	pkgName=$(make -C ${POUDRIERE_PORTDIR}/os/src -V PKGNAME PORTSDIR=${POUDRIERE_PORTDIR} __MAKE_CONF=${OBJDIR}/poudriere.d/${POUDRIERE_BASE}}-make.conf)
+	pkgName=$(make -C ${POUDRIERE_PORTDIR}/os/src -V PKGNAME PORTSDIR=${POUDRIERE_PORTDIR} __MAKE_CONF=${OBJDIR}/poudriere.d/${POUDRIERE_BASE}-make.conf)
 	echo "Looking for ${POUDRIERE_PKGDIR}/All/${pkgName}.txz"
 	if [ ! -e "${POUDRIERE_PKGDIR}/All/${pkgName}.txz" ] ; then
 		echo "Different os/src detected for ${POUDRIERE_BASE} jail"
@@ -694,6 +704,9 @@ create_iso_dir()
 create_offline_update()
 {
 	local NAME="system-update.img"
+	if [ ! -d "release/update" ] ; then
+		mkdir -p release/update
+	fi
 	echo "Creating ${NAME}..."
 	makefs release/update/${NAME} ${PKG_DISTDIR}
 	if [ $? -ne 0 ] ; then
@@ -703,10 +716,15 @@ create_offline_update()
 	if [ -z "${TRUEOS_VERSION}" ] ; then
 		TRUEOS_VERSION=$(jq -r '."os_version"' $TRUEOS_MANIFEST)
 	fi
+	if [ -d "${POUDRIERE_PORTDIR}/.git" ] ; then
+		GITHASH=$(git -C ${POUDRIERE_PORTDIR} log -1 --pretty=format:%h)
+	else
+		GITHASH="unknown"
+	fi
 	FILE_RENAME="$(jq -r '."iso"."file-name"' $TRUEOS_MANIFEST)"
 	if [ -n "$FILE_RENAME" -a "$FILE_RENAME" != "null" ] ; then
 		DATE="$(date +%Y%m%d)"
-		FILE_RENAME=$(echo $FILE_RENAME | sed "s|%%DATE%%|$DATE|g" | sed "s|%%TRUEOS_VERSION%%|$TRUEOS_VERSION|g")
+		FILE_RENAME=$(echo $FILE_RENAME | sed "s|%%DATE%%|$DATE|g" | sed "s|%%GITHASH%%|$GITHASH|g" | sed "s|%%TRUEOS_VERSION%%|$TRUEOS_VERSION|g")
 		echo "Renaming ${NAME} -> ${FILE_RENAME}.img"
 		mv release/update/${NAME} release/update/${FILE_RENAME}.img
 		NAME="${FILE_RENAME}.img"
@@ -770,8 +788,7 @@ EOF
 		# We have a conditional set of packages to include, lets do it
 		for i in $(jq -r '."iso"."iso-packages"."'$c'" | join(" ")' ${TRUEOS_MANIFEST})
 		do
-			pkg-static -o ABI_FILE=${POUDRIERE_JAILDIR}/bin/sh \
-				-R /etc/pkg \
+			pkg-static -R /etc/pkg \
 				-c ${ISODIR} \
 				install -y $i
 				if [ $? -ne 0 ] ; then
@@ -847,9 +864,14 @@ mk_iso_file()
 
 	TRUEOS_VERSION=$(jq -r '."os_version"' $TRUEOS_MANIFEST)
 	FILE_RENAME="$(jq -r '."iso"."file-name"' $TRUEOS_MANIFEST)"
+	if [ -d "${POUDRIERE_PORTDIR}/.git" ] ; then
+		GITHASH=$(git -C ${POUDRIERE_PORTDIR} log -1 --pretty=format:%h)
+	else
+		GITHASH="unknown"
+	fi
 	if [ -n "$FILE_RENAME" -a "$FILE_RENAME" != "null" ] ; then
 		DATE="$(date +%Y%m%d)"
-		FILE_RENAME=$(echo $FILE_RENAME | sed "s|%%DATE%%|$DATE|g" | sed "s|%%TRUEOS_VERSION%%|$TRUEOS_VERSION|g")
+		FILE_RENAME=$(echo $FILE_RENAME | sed "s|%%DATE%%|$DATE|g" | sed "s|%%GITHASH%%|$GITHASH|g" | sed "s|%%TRUEOS_VERSION%%|$TRUEOS_VERSION|g")
 		echo "Renaming ${NAME} -> release/iso/${FILE_RENAME}.iso"
 		mv ${NAME} release/iso/${FILE_RENAME}.iso
 		NAME="${FILE_RENAME}.iso"
