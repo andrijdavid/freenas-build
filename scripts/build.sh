@@ -119,6 +119,11 @@ setup_poudriere_conf()
 	else
 		ZPOOL=$(mount | grep 'on / ' | cut -d '/' -f 1)
 	fi
+	DEFAULT_DISTFILES="/usr/ports/distfiles"
+	DISTFILES=$(grep "^DISTFILES_CACHE=" /usr/local/etc/poudriere.conf | head -n 1 | cut -d '=' -f 2)
+	if [ -z "${DISTFILES}" ] ; then
+		DISTFILES="${DEFAULT_DISTFILES}"
+	fi
 	_pdconf="${POUDRIERED_DIR}/${POUDRIERE_PORTS}-poudriere.conf"
 	_pdconf2="${POUDRIERED_DIR}/${POUDRIERE_BASE}-poudriere.conf"
 
@@ -145,9 +150,10 @@ setup_poudriere_conf()
 	echo "Using zpool: $ZPOOL"
 	echo "ZPOOL=$ZPOOL" >> ${_pdconf}
 	echo "Using Ports Tree: $PORTS_URL"
-	echo "USE_TMPFS=data" >> ${_pdconf}
+	echo "USE_TMPFS=yes" >> ${_pdconf}
 	echo "BASEFS=$POUDRIERE_BASEFS" >> ${_pdconf}
 	echo "ATOMIC_PACKAGE_REPOSITORY=no" >> ${_pdconf}
+	echo "DISTFILES_CACHE=${DISTFILES}" >> ${_pdconf}
 	#echo "PKG_REPO_FROM_HOST=yes" >> ${_pdconf}
 	echo "ALLOW_MAKE_JOBS_PACKAGES=\"chromium* iridium* aws-sdk* gcc* webkit* llvm* clang* firefox* ruby* cmake* rust* qt5-web* phantomjs* swift* perl5* py*\"" >> ${_pdconf}
 	echo "PRIORITY_BOOST=\"pypy* openoffice* iridium* chromium* aws-sdk* libreoffice*\"" >> ${_pdconf}
@@ -386,6 +392,9 @@ setup_poudriere_jail()
 	fi
 
 	# Save the options used for this build
+	if [ ! -d "${POUDRIERE_PKGDIR}" ] ; then
+		mkdir -p ${POUDRIERE_PKGDIR}
+	fi
 	get_kernel_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/buildkernel.options
 	get_world_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/buildworld.options
 	get_os_port_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/osport.options
