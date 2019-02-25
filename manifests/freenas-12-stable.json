@@ -218,6 +218,7 @@
 				"os_buildworld_UNSET+=BSDINSTALL",
 				"os_buildworld_UNSET+=PPP",
 				"os_buildworld_UNSET+=SVNLITE",
+				"os_userland_UNSET+=LIB32",
 				"security_openssh-portable_SET+=HEIMDIAL_BASE",
 				"security_openssh-portable_SET+=NONECIPHER",
 				"security_openssh-portable_SET+=HPN",
