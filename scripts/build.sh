@@ -176,7 +176,7 @@ setup_poudriere_conf()
 	if [ -e "/etc/poudriere.conf.release" ] ; then
 		cat /etc/poudriere.conf.release >> ${_pdconf}
 	fi
-	cp ${_pdconf} ${_pdconf2}
+	cp ${_pdconf} ${_pdconf2} 2>/dev/null
 
 	# Set the TRUEOS_MANIFEST location for os/* build ports
 	echo "TRUEOS_MANIFEST=${TRUEOS_MANIFEST}" > ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
@@ -342,12 +342,14 @@ is_jail_dirty()
 	newOpt=$(get_world_flags | tr -d ' ' | md5)
 	oldOpt=$(cat ${POUDRIERE_PKGDIR}/buildworld.options | md5)
 	if [ "${newOpt}" != "${oldOpt}" ] ;then
+		echo "New world flags detected!"
 		return 1
 	fi
 	# Have the kernel options changed?
 	newOpt=$(get_kernel_flags | tr -d ' ' | md5)
 	oldOpt=$(cat ${POUDRIERE_PKGDIR}/buildkernel.options | md5)
 	if [ "${newOpt}" != "${oldOpt}" ] ;then
+		echo "New kernel flags detected!"
 		return 1
 	fi
 
@@ -355,6 +357,7 @@ is_jail_dirty()
 	newOpt=$(get_os_port_flags | tr -d ' ' | md5)
 	oldOpt=$(cat ${POUDRIERE_PKGDIR}/osport.options | md5)
 	if [ "${newOpt}" != "${oldOpt}" ] ;then
+		echo "New os_ options detected!"
 		return 1
 	fi
 
@@ -386,6 +389,15 @@ setup_poudriere_jail()
 
 	# Clean out old logs
 	rm ${POUDRIERE_LOGDIR}/base-ports/*
+
+	# Make sure local port options are gone for os/buildworld and os/buildkernel
+	# These conflict with options passed in via __MAKE_CONF
+	if [ -d "/var/db/ports/os_buildworld" ] ; then
+		rm -rf /var/db/ports/os_buildworld
+	fi
+	if [ -d "/var/db/ports/os_buildkernel" ] ; then
+		rm -rf /var/db/ports/os_buildkernel
+	fi
 
 	export KERNEL_MAKE_FLAGS="$(get_kernel_flags)"
 	export WORLD_MAKE_FLAGS="$(get_world_flags)"
@@ -627,25 +639,30 @@ clean_iso_dir()
 
 create_iso_dir()
 {
-	ABI=$(pkg-static -o ABI_FILE=${POUDRIERE_JAILDIR}/bin/sh config ABI)
-	PKG_DISTDIR="${ISODIR}/dist/${ABI}/latest"
 	clean_iso_dir
 
 	mk_repo_config
 
+	ABI=$(pkg-static -o ABI_FILE=${POUDRIERE_JAILDIR}/bin/sh config ABI)
+	PKG_DISTDIR="${ISODIR}/dist/${ABI}/latest"
 	mkdir -p "${PKG_DISTDIR}"
 
-	BASE_PACKAGES="userland kernel pkg jq"
+	mkdir -p ${ISODIR}/tmp
+	mkdir -p ${ISODIR}/var/db/pkg
+	cp -r tmp/repo-config ${ISODIR}/tmp/repo-config
 
-	# Install the base packages into ISODIR
+	export PKG_DBDIR="tmp/pkgdb"
+
+	BASE_PACKAGES="os/userland os/kernel ports-mgmt/pkg textproc/jq"
+
+	# Install the base packages into iso dir
 	for pkg in ${BASE_PACKAGES}
 	do
-		pkgFile=$(ls ${POUDRIERE_PKGDIR}/All/${pkg}-[0-9]*.txz)
 		pkg-static -r ${ISODIR} -o ABI_FILE=${POUDRIERE_JAILDIR}/bin/sh \
 			-R tmp/repo-config \
-			add ${pkgFile}
+			install -y ${pkg}
 		if [ $? -ne 0 ] ; then
-			exit_err "Failed installing base packages to ISO..."
+			exit_err "Failed installing base packages to ISO directory..."
 		fi
 
 	done
@@ -708,6 +725,12 @@ create_iso_dir()
 	if [ -n "${_missingpkgs}" ] ; then
 	  echo "WARNING: Optional Packages not available for ISO: ${_missingpkgs}"
 	fi
+
+	# Cleanup and move the updated pkgdb
+	unset PKG_DBDIR
+	mv ${VMDIR}/tmp/pkgdb/* ${VMDIR}/var/db/pkg/
+	rmdir ${VMDIR}/tmp/pkgdb
+
 	# Create the repo DB
 	echo "Creating installer pkg repo"
 	pkg-static repo ${PKG_DISTDIR} ${SIGNING_KEY}
@@ -1050,7 +1073,7 @@ create_vm_disk() {
 	fi
 }
 
-cleanup_vm_dir() {
+clean_vm_dir() {
 
 	if [ -d "release/vm-logs" ] ; then
 		rm -rf release/vm-logs
@@ -1179,7 +1202,7 @@ run_ec2_setup() {
 do_vm_create() {
 	VMDIR="vm-mnt"
 
-	cleanup_vm_dir
+	clean_vm_dir
 
 	load_vm_settings
 
@@ -1259,6 +1282,7 @@ case $1 in
 	clean) env_check
 	       clean_jails
 	       clean_iso_dir
+	       clean_vm_dir
 	       exit 0
 	       ;;
 	poudriere) env_check
