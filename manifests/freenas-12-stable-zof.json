@@ -157,7 +157,6 @@
 				"dns_samba-nsupdate_SET+=IPV6",
 				"emulators_mtools_UNSET+=X11",
 				"emulators_openvm-tools_UNSET+=ICU",
-				"emulators_virtualbox-ose-kmod_SET+=VIMAGE",
 				"editors_jed_UNSET+=X11",
 				"devel_gdb_SET+=PYTHON",
 				"graphics_cairo_UNSET+=OPENGL XCB X11",
