@@ -53,64 +53,7 @@
 			"name": "freenas-boot"
 		},
 		"os_name": "FreeNAS",
-		"post-install-commands": [
-			{
-				"chroot": true,
-				"command": "sysrc -f /boot/loader.conf rc_system=rc"
-			},
-			{
-				"chroot": true,
-				"command": "touch /etc/dynamicdiskless"
-			},
-			{
-				"chroot": true,
-				"command": "mkdir -p /conf/base/etc"
-			},
-			{
-				"chroot": true,
-				"command": "echo 65535 > /conf/base/etc/md_size"
-			},
-			{
-				"chroot": true,
-				"command": "mkdir -p /conf/base/var"
-			},
-			{
-				"chroot": true,
-				"command": "mkdir -p /conf/base/mnt"
-			},
-			{
-				"chroot": true,
-				"command": "echo 8192 > /conf/base/mnt/md_size"
-			},
-			{
-				"chroot": true,
-				"command": "mkdir -p /conf/base/usr__local__etc"
-			},
-			{
-				"chroot": true,
-				"command": "echo 65535 > /conf/base/usr__local__etc/md_size"
-			},
-			{
-				"chroot": true,
-				"command": "ln -s /usr/local/etc /etc/local"
-			},
-			{
-				"chroot": true,
-				"command": "ln -fs /var/tmp/.rnd /.rnd"
-			},
-			{
-				"chroot": false,
-				"command": "zfs destroy freenas-boot/tmp"
-			},
-			{
-				"chroot": true,
-				"command": "rm -rf /tmp"
-			},
-			{
-				"chroot": true,
-				"command": "ln -fs /var/tmp /tmp"
-			}
-		]
+		"post-install-commands": []
 	},
 	"os_name": "FreeNAS",
 	"os_version": "12-STABLE",
