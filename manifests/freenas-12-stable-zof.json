@@ -45,7 +45,7 @@
 		"file-name": "FreeNAS-12-snapshot-ZOF-x64-%%DATE%%",
 		"install-script": "",
 		"iso-packages": {
-			"default": []
+			"default": ["freenas/freenas-installer"]
 		},
 		"offline-update": true,
 		"overlay": {},
