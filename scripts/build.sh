@@ -203,7 +203,7 @@ create_release_links()
 is_ports_dirty()
 {
 	# Does ports tree already exist?
-	poudriere ports -l | grep -q -w ${POUDRIERE_PORTS}
+	poudriere ports -l 2>/dev/null | grep -q -w ${POUDRIERE_PORTS}
 	if [ $? -ne 0 ]; then
 		return 1
 	fi
@@ -238,7 +238,7 @@ setup_poudriere_ports()
 	fi
 
 	# Do we have any locally checked out sources to copy into poudirere jail?
-	LOCAL_SOURCE_DIR=source
+	LOCAL_SOURCE_DIR=${LOCAL_SOURCE_DIR:-source}
 	if [ -n "$LOCAL_SOURCE_DIR" -a -d "${LOCAL_SOURCE_DIR}" ] ; then
 		rm -rf ${POUDRIERE_PORTDIR}/local_source 2>/dev/null
 		cp -a ${LOCAL_SOURCE_DIR} ${POUDRIERE_PORTDIR}/local_source
@@ -460,6 +460,9 @@ build_poudriere()
 		# Start the build
 		echo "Starting poudriere FULL build"
 		poudriere bulk -a -j $POUDRIERE_BASE -p ${POUDRIERE_PORTS}
+		if [ $? -ne 0 ] ; then
+			exit_err "Failed poudriere build"
+		fi
 		check_essential_pkgs
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed building all essential packages.."
@@ -480,9 +483,27 @@ build_poudriere()
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed poudriere build"
 		fi
+	fi
+	# Assemble the package manifests as needed
+	if [ $(jq -r '."ports"."generate-manifests"' ${TRUEOS_MANIFEST}) = "true" ] ; then
+		echo "Generating Package Manifests"
+		#Cleanup the output directory first
+		local mandir="release/pkg-manifests"
+		if [ -d "${mandir}" ] ; then
+			rm ${mandir}/*
+		else
+			mkdir -p "${mandir}"
+		fi
+		# Copy over the relevant files from the ports tree
+		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name MOVED)" ${mandir}/.
+		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name UPDATING)" ${mandir}/.
+		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name CHANGES)" ${mandir}/.
+		# Assemble a quick list of all the ports/packages that are available in the repo
+		mk_repo_config
+		pkg-static -R tmp/repo-config query -a "%o : %n : %v" > "${mandir}/pkg.list"
 
 	fi
-
+	return 0
 }
 
 clean_poudriere()
@@ -625,6 +646,37 @@ base: {
 }
 EOF
 
+}
+
+sign_file(){
+  # Sign a file with openssl
+  local file="$1"
+
+  if [ -z "${SIGNING_KEY}" ] ; then
+    echo "No signing key provided - skipping signing of file: ${file}"
+    return 0
+  fi
+  echo "Signing file: ${file}"
+  openssl dgst -sha512 -sign "${SIGNING_KEY}" -out "${file}.sig.sha512" "${file}"
+  if [ $? -ne 0 ] ; then
+    echo "ERROR signing file!"
+    return 1
+  fi
+  echo " - Generating pubkey for signature verification"
+  # Need an actual file for the pubkey
+  local keyfile
+  if [ -e "${SIGNING_KEY}" ] ; then
+    keyfile="${SIGNING_KEY}"
+  else
+    keyfile="_internal_priv.key"
+    echo "${SIGNING_KEY}" > "${keyfile}"
+  fi
+  openssl rsa -in "${keyfile}" -pubout -out $(dirname "${file}")/pubkey.pem
+  #Make sure we delete any temporary private key file
+  if [ "${keyfile}" = "_internal_priv.key" ] ; then
+    rm "${keyfile}"
+  fi
+  return 0
 }
 
 clean_iso_dir()
@@ -913,6 +965,7 @@ mk_iso_file()
 	fi
 	sha256 -q release/iso/${NAME} > release/iso/${NAME}.sha256
 	md5 -q release/iso/${NAME} > release/iso/${NAME}.md5
+	sign_file release/iso/${NAME}
 }
 
 check_version()
@@ -1113,13 +1166,20 @@ create_vm_dir()
 	done
 
 	# Install the packages from JSON manifest
+	# - get whether to use the "iso" or "vm" parent object
+	local pobj="vm"
+	jq -e '."vm"."auto-install-packages"' ${TRUEOS_MANIFEST} 2>/dev/null
+	if [ $? -ne 0 ] ; then
+		pobj="iso"
+	fi
+	# - Now loop through the list
 	for ptype in auto-install-packages
 	do
-		for c in $(jq -r '."iso"."'${ptype}'" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
+		for c in $(jq -r '."'${pobj}'"."'${ptype}'" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
 		do
 			eval "CHECK=\$$c"
 			if [ -z "$CHECK" -a "$c" != "default" ] ; then continue; fi
-			for i in $(jq -r '."iso"."'${ptype}'"."'$c'" | join(" ")' ${TRUEOS_MANIFEST})
+			for i in $(jq -r '."'${pobj}'"."'${ptype}'"."'$c'" | join(" ")' ${TRUEOS_MANIFEST})
 			do
 				if [ -z "${i}" ] ; then continue; fi
 				echo "Installing: $i"
@@ -1241,6 +1301,7 @@ do_vm_create() {
 	echo "Creating checksums"
 	sha256 -q release/vm/${NAME} > release/vm/${NAME}.sha256
 	md5 -q release/vm/${NAME} > release/vm/${NAME}.md5
+	sign_file release/vm/${NAME}
 }
 
 do_iso_create() {
