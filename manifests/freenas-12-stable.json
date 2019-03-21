@@ -178,6 +178,8 @@
 				"sysutils_e2fsprogs_SET+=SMALLTESTS",
 				"sysutils_nut_UNSET+=NEON",
 				"sysutils_tmux_SET+=LIBEVENT2",
+				"sysutils_zol_SET+=DEBUG",
+				"sysutils_zol-kmod_SET+=DEBUG",
 				"www_nginx_SET+=HTTP_SSL",
 				"www_nginx_SET+=HTTP_UPLOAD",
 				"www_nginx_SET+=HTTP_UPLOAD_PROGRESS",
