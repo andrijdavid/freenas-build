@@ -80,6 +80,7 @@
 		"branch": "freenas/12-stable",
 		"build": {
 			"default": [
+				"editors/emacs",
 				"os/kernel-debug",
 				"os/userland-debug"
 			]
@@ -101,6 +102,7 @@
 				"devel_dbus_UNSET+=X11",
 				"devel_gdb_SET+=PYTHON",
 				"dns_samba-nsupdate_SET+=IPV6",
+				"editors_emacs_UNSET+=GTK3",
 				"emulators_mtools_UNSET+=X11",
 				"emulators_openvm-tools_UNSET+=ICU",
 				"editors_jed_UNSET+=X11",
