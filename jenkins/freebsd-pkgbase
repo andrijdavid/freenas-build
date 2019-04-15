@@ -1,19 +1,19 @@
 /*
 
 Our default Jenkins pipeline we use to create our on-commit
-snapshot builds of FreeNAS 12 branch.
+snapshot builds of trueos-master branch.
 
 */
 
 pipeline {
-  agent { label 'FreeNAS-12-Snapshot' }
+  agent { label 'TrueOS-Build-Unstable' }
 
   environment {
     GH_ORG = 'trueos'
     GH_REPO = 'trueos'
-    POUDRIERE_BASE = 'freenas12-base'
-    POUDRIERE_PORTS = 'freenas12-ports'
-    TRUEOS_VERSION = '12.0'
+    POUDRIERE_BASE = 'freebsd-pkgbase-base'
+    POUDRIERE_PORTS = 'freebsd-pkgbase-ports'
+    TRUEOS_VERSION = '13.0'
   }
 
   stages {
@@ -31,7 +31,7 @@ pipeline {
       }
       environment {
          SIGNING_KEY = credentials('a50f9ddd-1460-4951-a304-ddbf6f2f7990')
-	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/freenas-12-stable.json"
+	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/freebsd-pkgbase.json"
       }
       steps {
         sh 'make ports'
@@ -45,7 +45,7 @@ pipeline {
       }
       environment {
          SIGNING_KEY = credentials('a50f9ddd-1460-4951-a304-ddbf6f2f7990')
-	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/freenas-12-stable.json"
+	 TRUEOS_MANIFEST="${env.WORKSPACE}/manifests/freebsd-pkgbase.json"
       }
       steps {
         sh 'make iso'
@@ -54,10 +54,10 @@ pipeline {
     stage('Publish') {
       steps {
         sshagent (credentials: ['ef8c8aff-3b80-4a6a-9e0c-4d015bc5e945']) {
-          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null trueos@cdn1.tn.ixsystems.com mkdir -p /cdn/pkg.trueos.org/pkg/freenas/12/snapshot || true'
-          sh 'cd release/packages && rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" . trueos@cdn1.tn.ixsystems.com:/cdn/pkg.trueos.org/pkg/freenas/12/snapshot/'
-          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null trueos@cdn1.tn.ixsystems.com mkdir -p /cdn/pkg.trueos.org/iso/freenas/12/snapshot/ || true'
-          sh 'rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" release/iso/ trueos@cdn1.tn.ixsystems.com:/cdn/pkg.trueos.org/iso/freenas/12/snapshot/'
+          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null trueos@cdn1.tn.ixsystems.com mkdir -p /cdn/pkg.trueos.org/pkg/freebsd-pkgbase/FreeBSD:13:amd64/latest || true'
+          sh 'cd release/packages && rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" . trueos@cdn1.tn.ixsystems.com:/cdn/pkg.trueos.org/pkg/freebsd-pkgbase/FreeBSD:13:amd64/latest/'
+          sh 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null trueos@cdn1.tn.ixsystems.com mkdir -p /cdn/pkg.trueos.org/iso/freebsd-pkgbase/ || true'
+          sh 'rsync -av --delete-after --delay-updates -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" release/iso/ trueos@cdn1.tn.ixsystems.com:/cdn/pkg.trueos.org/iso/freebsd-pkgbase/'
         }
       }
     }

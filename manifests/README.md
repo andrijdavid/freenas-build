@@ -30,6 +30,9 @@ The "base-packages" target allows the configuration of the OS packages itself. T
    * **ENV_VARIABLE** (JSON array of strings) : Additional list to be added to the "default" list **if** an environment variable with the same name exists.
    * ***WARNING:*** The only kernel flag that should be optionally set here is the "KERNCONF" setting for selecting a custom kernel configuration. All other world/kernel options are exposed via port options on the "buildworld" and "buildkernel" ports and should be modified in the "ports -> make.conf" section of the manifest.
 * **strip-plist** (JSON array of strings) :  List of directories or files that need to be removed from the base-packages.
+* **trueos-branch** (string) : Supply a branch name from the trueos/trueos github repository to use for the OS branch.
+   * This will ensure that all the base packages use the version of the OS that comes from this branch.
+   * If unset, the build will use whichever version of the base packages are currently set in the ports tree.
 
 #### Base Packages Example
 ```
@@ -81,6 +84,8 @@ The "iso" target within the manifest controls all the options specific to creati
    * **default** (JSON array of strings) : Default list (required)
    * **ENV_VARIABLE** (JSON array of strings) : Additional list to be added to the "default" list **if** an environment variable with the same name exists.
 * **offline-update** (boolean) : If set to true will generate a system-update.img file containing ISOs dist files
+* **generate-manifest** (boolean) : If set to true, will generate a "manifest.json" file containing references or contents of all the files in the ISO output directory.
+* **generate-update-manifest** (boolean) : If set to true, will generate a "manifest.json" file containing references or contents of all the files in the offline-update output directory.
 * **optional-dist-packages** (JSON object) : Lists of packages (by port origin) to have available in .txz form on the ISO. These ones are considered "optional" and may or may not be included depending on whether the package built successfully.
    * **default** (JSON array of strings) : Default list (required)
    * **ENV_VARIABLE** (JSON array of strings) : Additional list to be added to the "default" list **if** an environment variable with the same name exists.
@@ -195,6 +200,7 @@ The "vm" target is used to provide custom settings when assembling a VM image wi
    * **NOTE:** If this field is missing, it will use the "iso" version of the "auto-install-packages" field as a fallback list.
    * **default** (JSON array of strings) : Default list (required)
    * **ENV_VARIABLE** (JSON array of strings) : Additional list to be added to the "default" list **if** an environment variable with the same name exists.
+* **generate-manifest** (boolean) : If set to true, will generate a "manifest.json" file containing references or contents of all the files in the VM output directory.
 
 #### VM Example
 ```
@@ -211,9 +217,20 @@ The "vm" target is used to provide custom settings when assembling a VM image wi
 The "ports" target allows for configuring the build targets and options for the ports system. That can include changing the default version for particular packages, selecting a subset of packages to build, and more.
 
 #### Ports Options
-* **type** (string) : One of the following: [git, svn, tar, local, null]. Where to look for the ports tree.
+* **type** (string) : One of the following: [git, github-tar, svn, tar, local]. Where to look for the ports tree.
 * **branch** (string) : Branch of the repository to use (svn/git only)
 * **url** (string) : URL to the repository (svn/git), where to fetch the tar file (tar), or path to directory (local)
+* **github-org** (string) : (github-tar type only) Organization to fetch from on GitHub
+* **github-repo** (string) : (github-tar type only) Repository to fetch from the GitHub organization
+* **github-tag** (string) : (github-tar type only) Either a branch name or a commit tag from the default branch.
+   * If a branch name is supplied, then every time the build is run it will check to see if the upstream repo/branch has changed, and update itself as needed
+   * If a commit tag is supplied, the it will grab the version of the *default branch* at the designated commit.
+* **overlay** (JSON array of objects) : Entries to apply various overlay(s) to the ports tree after it has been checked out.
+   * **WARNING** Ports overlay can only be used with the "tar","github-tar", and "local"  ports types.
+   * Syntax for objects within the array:
+      * "type" : (string) Either "category" (adding a new category to the ports tree) or "port" (adding a single port to the tree)
+      * "name" : (string) Category name ("mydistro") or port origin ("devel/myport") depending on the type of overlay.
+      * "local_path" : (string) path to the local directory which will be used as the overlay.
 * **local_source** (string) : Path to a local directory where the ports tree should be placed (used for reproducible builds). This directory name will be visible in the output of `uname` on installed systems.
 * **build-all** (boolean) : Build the entire ports collection (true/false)
 * **generate-manifests** (boolean) : Assemble the "pkg-manifests" directory of repo-management files. (true/false)
@@ -256,6 +273,28 @@ The "ports" target allows for configuring the build targets and options for the 
   "strip-plist":[
 	  "/usr/local/share/doc/tmux",
 	  "/usr/local/share/examples/tmux"
+  ]
+}
+```
+
+Example of how to use the "github-overlay" type of ports. All the options unrelated to the type are still valid - just not shown in this example.
+```
+"ports" : {
+  "type" : "github-overlay",
+  "github-org" : "trueos",
+  "github-repo" : "trueos-ports",
+  "github-tag" : "trueos-master",
+  "github-overlay" : [
+    {
+      "type" : "category",
+      "name" : "mydistro",
+      "local_path" : "overlay/mydistro"
+    },
+    {
+      "type" : "port",
+      "name" : "devel/myport",
+      "local_path" : "overlay/devel/myport"
+    }
   ]
 }
 ```

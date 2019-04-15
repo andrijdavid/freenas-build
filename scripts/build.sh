@@ -29,14 +29,48 @@
 
 export PATH="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin"
 
+delete_tmp_manifest(){	
+	if [ -e "${TRUEOS_MANIFEST}.orig" ] ; then	
+		#Put the original manifest file back in place	
+		mv "${TRUEOS_MANIFEST}.orig" "${TRUEOS_MANIFEST}"	
+	fi	
+}	
+
+
 exit_err()
 {
 	echo "ERROR: $1"
+	delete_tmp_manifest
 	if [ -n "$2" ] ; then
 		exit $2
 	else
 		exit 1
 	fi
+}
+
+get_architecture()
+{
+	if jq -e -r '."arch"' $TRUEOS_MANIFEST 2>&1 >/dev/null ; then
+		local arch="$(jq -r '."arch"."arch"' $TRUEOS_MANIFEST)"
+		if jq -e -r '."arch"."platform"' $TRUEOS_MANIFEST 2>&1 >/dev/null ; then
+			local platform="$(jq -r '."arch"."platform"' $TRUEOS_MANIFEST)"
+		else
+			local platform="${arch}"
+		fi
+	else
+		local arch="native"
+	fi 
+	echo $platform.$arch
+}
+
+get_arch()
+{
+	get_architecture | cut -d'.' -f2
+}
+
+get_platform()
+{
+	get_architecture | cut -d'.' -f1
 }
 
 
@@ -53,6 +87,14 @@ if [ -z "$TRUEOS_MANIFEST" ] ; then
 	exit_err "Unset TRUEOS_MANIFEST"
 fi
 
+#Perform any directory replacements in the manifest as needed
+grep -q "%%PWD%%" "${TRUEOS_MANIFEST}"
+if [ $? -eq 0 ] ; then
+	echo "Replacing PWD paths in Build Manifest..."
+	cp "${TRUEOS_MANIFEST}" "${TRUEOS_MANIFEST}.orig"
+	sed -i '' "s|%%PWD%%|$(dirname ${TRUEOS_MANIFEST})|g" "${TRUEOS_MANIFEST}"
+fi
+
 CHECK=$(jq -r '."poudriere"."jailname"' $TRUEOS_MANIFEST)
 if [ -n "$CHECK" -a "$CHECK" != "null" ] ; then
 	POUDRIERE_BASE="$CHECK"
@@ -62,9 +104,14 @@ if [ -n "$CHECK" -a "$CHECK" != "null" ] ; then
 	POUDRIERE_PORTS="$CHECK"
 fi
 
+local platform="$(get_platform)"
+
+
 # Set our important defaults
 POUDRIERE_BASEFS=${POUDRIERE_BASEFS:-/usr/local/poudriere}
-POUDRIERE_BASE=${POUDRIERE_BASE:-trueos-mk-base}
+POUDRIERE_BASE=${POUDRIERE_BASE:-trueos-mk-base%%ARCH%%}
+#Using platform as it is should match or be more unique then arch
+POUDRIERE_BASE=$( echo ${POUDRIERE_BASE} | sed "s|%%ARCH%%|${platform}|g" )
 POUDRIERE_PORTS=${POUDRIERE_PORTS:-trueos-mk-ports}
 PKG_CMD=${PKG_CMD:-pkg-static}
 
@@ -81,11 +128,17 @@ ISODIR="tmp/iso"
 # Temp pool name to use for VM creation
 VMPOOLNAME="${VMPOOLNAME:-vm-gen-pool}"
 
+#Source the ports-interactions scripts
+. "$(dirname $0)/ports-interactions.sh"
+		
 # Validate that we have a good TRUEOS_MANIFEST and sane build environment
 env_check()
 {
 	echo "Using TRUEOS_MANIFEST: $TRUEOS_MANIFEST" >&2
 	PORTS_TYPE=$(jq -r '."ports"."type"' $TRUEOS_MANIFEST)
+	if [ $? -ne 0 ] ; then
+	  exit_err "Unable to parse manifest: Check JSON syntax"
+	fi
 	PORTS_URL=$(jq -r '."ports"."url"' $TRUEOS_MANIFEST)
 	PORTS_BRANCH=$(jq -r '."ports"."branch"' $TRUEOS_MANIFEST)
 
@@ -97,12 +150,17 @@ env_check()
 			exit_err "Empty ports.branch!"
 		     fi ;;
 		svn) ;;
-              local) ;;
+		github-tar) ;;
+		local) ;;
 		tar) ;;
 		*) exit_err "Unknown or unspecified ports.type!" ;;
 	esac
 
-	if [ -z "$PORTS_URL" ] ; then
+	/usr/bin/which -s poudriere
+	if [ $? -ne 0 ] ; then
+		exit_err "poudriere does not appear to be installed!"
+	fi
+	if [ -z "$PORTS_URL" ] && [ "${PORTS_TYPE}" != "github-overlay" ] ; then
 		exit_err "Empty ports.url!"
 	fi
 
@@ -141,6 +199,11 @@ setup_poudriere_conf()
 	if [ $? -ne 0 ] ; then
 		echo "ZPOOL=$ZPOOL" >> /usr/local/etc/poudriere.conf
 	fi
+	#Ensure that the basefs variable is setup as well - needed for iterative builds.
+	grep -q "^BASEFS=" /usr/local/etc/poudriere.conf
+	if [ $? -ne 0 ] ; then
+		echo "BASEFS=$POUDRIERE_BASEFS" >> /usr/local/etc/poudriere.conf
+	fi
 
 	# Copy the systems poudriere.conf over
 	cat /usr/local/etc/poudriere.conf.sample \
@@ -152,7 +215,7 @@ setup_poudriere_conf()
 		> ${_pdconf}
 	echo "Using zpool: $ZPOOL"
 	echo "ZPOOL=$ZPOOL" >> ${_pdconf}
-	echo "Using Ports Tree: $PORTS_URL"
+	echo "Using Ports Tree: ${POUDRIERE_PORTS}"
 	echo "USE_TMPFS=yes" >> ${_pdconf}
 	echo "BASEFS=$POUDRIERE_BASEFS" >> ${_pdconf}
 	echo "ATOMIC_PACKAGE_REPOSITORY=no" >> ${_pdconf}
@@ -200,21 +263,80 @@ create_release_links()
 	ln -fs ${POUDRIERE_PKGLOGS} release/port-logs
 }
 
+assemble_file_manifest(){
+	# Assemble a manifest.json file containing references to all the files in this directory.
+	# INPUTS
+	# $1 : Directory to scan and place the manifest
+	local dir="$1"
+	local mfile="${dir}/manifest.json"
+	echo "Assemble file manifest: ${mfile}"
+	local manifest
+	local var
+	for file in `ls "${dir}"` ; do
+		name="$(basename ${file})"
+		var=""
+		case "${name}" in
+			*.iso)
+				var="\"iso_file\" : \"${name}\", \"iso_size\" : \"$(ls -lh ${dir}/${name} | cut -w -f 5)\""
+				;;
+			*.img)
+				var="\"img_file\" : \"${name}\", \"img_size\" : \"$(ls -lh ${dir}/${name} | cut -w -f 5)\""
+				;;
+			*.sig.*)
+				var="\"signature_file\" : \"${name}\""
+				;;
+			*.md5)
+				var="\"md5_file\" : \"${name}\", \"md5\" : \"$(cat ${dir}/${name})\""
+				;;
+			*.sha256)
+				var="\"sha256_file\" : \"${name}\", \"sha256\" : \"$(cat ${dir}/${name})\""
+				;;
+		esac
+		if [ -n "${var}" ] ; then
+			if [ -n "${manifest}" ] ; then
+				#Next item in the object
+				manifest="${manifest}, ${var}"
+			else
+				#First item
+				manifest="${var}"
+			fi
+		fi
+	done
+	if [ -n "${manifest}" ] ; then
+		# Also inject the date/time of the current build here
+		local _date=`date -ju "+%Y_%m_%d %H:%M %Z"`
+		local _date_secs=`date -j +%s`
+		manifest="${manifest}, \"build_date\" : \"${_date}\", \"build_date_time_t\" : \"${_date_secs}\""
+		echo "{ ${manifest} }" > "${mfile}"
+		return 0
+	else
+		# No files? Return an error
+		echo " [ERROR] Could not assemble file manifest: ${mfile}"
+		return 1
+	fi
+}
+
 is_ports_dirty()
 {
 	# Does ports tree already exist?
+	echo "Scanning for existing ports tree: ${POUDRIERE_PORTS}"
 	poudriere ports -l 2>/dev/null | grep -q -w ${POUDRIERE_PORTS}
 	if [ $? -ne 0 ]; then
+		echo "Ports tree does not exist yet: ${POUDRIERE_PORTS}"
 		return 1
 	fi
 
-	CURBRANCH=$(cd ${POUDRIERE_PORTDIR} && git branch | awk '{print $2}')
+	CURBRANCH=$(cd ${PDIR} 2>/dev/null && git branch | awk '{print $2}')
 	if [ -z "$CURBRANCH" ] ; then
+		echo "Unable to detect branch, checking out ports fresh"
+		echo -e "y\n" | poudriere ports -d -p ${POUDRIERE_PORTS}
 		return 1
 	fi
 
 	# Have we changed branches?
 	if [ "$CURBRANCH" != "${PORTS_BRANCH}" ] ; then
+		echo "Branch change detected, checking out ports fresh"
+		echo -e "y\n" | poudriere ports -d -p ${POUDRIERE_PORTS}
 		return 1
 	fi
 
@@ -240,10 +362,25 @@ setup_poudriere_ports()
 	# Do we have any locally checked out sources to copy into poudirere jail?
 	LOCAL_SOURCE_DIR=${LOCAL_SOURCE_DIR:-source}
 	if [ -n "$LOCAL_SOURCE_DIR" -a -d "${LOCAL_SOURCE_DIR}" ] ; then
+		if [ ! -d "${POUDRIERE_PORTDIR}" ] ; then
+			mkdir -p ${POUDRIERE_PORTDIR}
+		fi
 		rm -rf ${POUDRIERE_PORTDIR}/local_source 2>/dev/null
 		cp -a ${LOCAL_SOURCE_DIR} ${POUDRIERE_PORTDIR}/local_source
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed copying ${LOCAL_SOURCE_DIR} -> ${POUDRIERE_PORTDIR}/local_source"
+		fi
+	fi
+
+	# If TRUEOS_MANIFEST is set, copy to ports for later os/manifest to ingest
+	if [ -n "$TRUEOS_MANIFEST" ] ; then
+		echo "Copying build manifest into ports tree"
+		if [ ! -d "${POUDRIERE_PORTDIR}/local_source" ] ; then
+			mkdir -p ${POUDRIERE_PORTDIR}/local_source
+		fi
+		cp ${TRUEOS_MANIFEST} ${POUDRIERE_PORTDIR}/local_source/trueos-manifest.json
+		if [ $? -ne 0 ] ; then
+			exit_err "Failed copying manifest into ports -> ${POUDRIERE_PORTDIR}/local_source"
 		fi
 	fi
 
@@ -265,6 +402,15 @@ setup_poudriere_ports()
 		jq -r '."ports"."make.conf"."'$c'" | join("\n")' ${TRUEOS_MANIFEST} >>${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
 	done
 
+	# See if a particular version of the base sources is specified
+	#  and ensure the base ports are all pointing to the right branch of the OS repo
+	if [ -e "${POUDRIERE_PORTDIR}/update-branch-os.sh" ] ; then
+		local os_branch=$(jq -r '."base-packages"."trueos-branch"' ${TRUEOS_MANIFEST})
+		if [ -n "${os_branch}" ] && [ "${os_branch}" != "null" ] ; then
+			echo "Adjusting TrueOS version branch: ${os_branch}"
+			(cd "${POUDRIERE_PORTDIR}" && ./update-branch-os.sh "os" "${os_branch}")
+		fi
+	fi
 }
 
 create_poudriere_ports()
@@ -276,11 +422,13 @@ create_poudriere_ports()
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed creating poudriere ports - GIT"
 		fi
+
 	elif [ "$PORTS_TYPE" = "svn" ] ; then
 		poudriere ports -c -p $POUDRIERE_PORTS -m svn -U "${PORTS_URL}" -B $PORTS_BRANCH
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed creating poudriere ports - SVN"
 		fi
+
 	elif [ "$PORTS_TYPE" = "tar" ] ; then
 		echo "Fetching ports tarball"
 		fetch -o tmp/ports.tar ${PORTS_URL}
@@ -297,11 +445,34 @@ create_poudriere_ports()
 			exit_err "Failed extracting poudriere ports"
 		fi
 
+		# Apply any ports overlay
+		apply_ports_overlay "tmp/ports-tree"
+
 		poudriere ports -c -p $POUDRIERE_PORTS -m null -M tmp/ports-tree
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed creating poudriere ports"
 		fi
+
+	elif [ "${PORTS_TYPE}" = "github-tar" ] ; then
+		#Now checkout the ports tree and apply the overlay
+		local portsdir=$(pwd)/tmp/$(basename -s ".json" "${TRUEOS_MANIFEST}")
+		checkout_gh_ports "${portsdir}"
+		if [ $? -ne 0 ] ; then
+			exit_err "Failed fetching poudriere ports: github-tar"
+		fi
+		# Now do the nullfs mount into poudriere
+		poudriere ports -c -p $POUDRIERE_PORTS -m null -M "${portsdir}"
+		if [ $? -ne 0 ] ; then
+			exit_err "Failed creating poudriere ports"
+		fi
+		# Also fix the internal variable pointing to the location of the ports tree on disk
+		# This is used for checking essential packages later
+		POUDRIERE_PORTDIR=${portsdir}
+		
 	else
+		# LOCAL TYPE
+		# Apply any ports overlay
+		apply_ports_overlay "${PORTS_URL}"
 		# Doing a nullfs mount of existing directory
 		poudriere ports -c -p $POUDRIERE_PORTS -m null -M ${PORTS_URL}
 		if [ $? -ne 0 ] ; then
@@ -401,7 +572,12 @@ setup_poudriere_jail()
 
 	export KERNEL_MAKE_FLAGS="$(get_kernel_flags)"
 	export WORLD_MAKE_FLAGS="$(get_world_flags)"
-	poudriere jail -c -j $POUDRIERE_BASE -m ports=${POUDRIERE_PORTS} -v ${TRUEOS_VERSION}
+	architecture="$(get_architecture)"
+	if [ $architecture == ".native" ] ; then
+		poudriere jail -c -j $POUDRIERE_BASE -m ports=${POUDRIERE_PORTS} -v ${TRUEOS_VERSION}
+	else
+		poudriere jail -c -j $POUDRIERE_BASE -m ports=${POUDRIERE_PORTS} -v ${TRUEOS_VERSION} -a ${architecture}
+	fi
 	if [ $? -ne 0 ] ; then
 		exit 1
 	fi
@@ -446,6 +622,7 @@ get_pkg_build_list()
 	# Get the explicit packages
 	echo 'os/userland' >> ${1}
 	echo 'os/kernel' >> ${1}
+	echo 'textproc/jq' >> ${1}
 
 	# Sort and remove dups
 	cat ${1} | sort -r | uniq > ${1}.new
@@ -460,9 +637,11 @@ build_poudriere()
 		# Start the build
 		echo "Starting poudriere FULL build"
 		poudriere bulk -a -j $POUDRIERE_BASE -p ${POUDRIERE_PORTS}
-		if [ $? -ne 0 ] ; then
-			exit_err "Failed poudriere build"
-		fi
+		# Do not exit if non-zero : poudriere report non-zero return if *any* ports fail to build
+		#   and a bulk/full build is almost guaranteed to have some failures.
+		#if [ $? -ne 0 ] ; then
+		#	exit_err "Failed poudriere build"
+		#fi
 		check_essential_pkgs
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed building all essential packages.."
@@ -500,7 +679,7 @@ build_poudriere()
 		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name CHANGES)" ${mandir}/.
 		# Assemble a quick list of all the ports/packages that are available in the repo
 		mk_repo_config
-		pkg-static -R tmp/repo-config query -a "%o : %n : %v" > "${mandir}/pkg.list"
+		pkg-static -R tmp/repo-config rquery -a "%o : %n : %v" > "${mandir}/pkg.list"
 
 	fi
 	return 0
@@ -588,7 +767,6 @@ check_essential_pkgs()
 	local _missingpkglist=""
 	for i in $ESSENTIAL
 	do
-
 		if [ ! -d "${POUDRIERE_PORTDIR}/${i}" ] ; then
 			echo "WARNING: Invalid PORT: $i"
 			_missingpkglist="${_missingpkglist} ${i}"
@@ -612,11 +790,11 @@ check_essential_pkgs()
 		else
 			echo "Verified: ${pkgName}"
 		fi
-   done
-   if [ $haveWarn -eq 1 ] ; then
-     echo "WARNING: Essential Packages Missing: ${_missingpkglist}"
-   fi
-   return $haveWarn
+	done
+	if [ $haveWarn -eq 1 ] ; then
+		echo "WARNING: Essential Packages Missing: ${_missingpkglist}"
+	fi
+	return $haveWarn
 }
 
 clean_jails()
@@ -649,34 +827,34 @@ EOF
 }
 
 sign_file(){
-  # Sign a file with openssl
-  local file="$1"
+	# Sign a file with openssl
+	local file="$1"
 
-  if [ -z "${SIGNING_KEY}" ] ; then
-    echo "No signing key provided - skipping signing of file: ${file}"
-    return 0
-  fi
-  echo "Signing file: ${file}"
-  openssl dgst -sha512 -sign "${SIGNING_KEY}" -out "${file}.sig.sha512" "${file}"
-  if [ $? -ne 0 ] ; then
-    echo "ERROR signing file!"
-    return 1
-  fi
-  echo " - Generating pubkey for signature verification"
-  # Need an actual file for the pubkey
-  local keyfile
-  if [ -e "${SIGNING_KEY}" ] ; then
-    keyfile="${SIGNING_KEY}"
-  else
-    keyfile="_internal_priv.key"
-    echo "${SIGNING_KEY}" > "${keyfile}"
-  fi
-  openssl rsa -in "${keyfile}" -pubout -out $(dirname "${file}")/pubkey.pem
-  #Make sure we delete any temporary private key file
-  if [ "${keyfile}" = "_internal_priv.key" ] ; then
-    rm "${keyfile}"
-  fi
-  return 0
+	if [ -z "${SIGNING_KEY}" ] ; then
+		echo "No signing key provided - skipping signing of file: ${file}"
+		return 0
+	fi
+	echo "Signing file: ${file}"
+	openssl dgst -sha512 -sign "${SIGNING_KEY}" -out "${file}.sig.sha512" "${file}"
+	if [ $? -ne 0 ] ; then
+		echo "ERROR signing file!"
+		return 1
+	fi
+	echo " - Generating pubkey for signature verification"
+	# Need an actual file for the pubkey
+	local keyfile
+	if [ -e "${SIGNING_KEY}" ] ; then
+		keyfile="${SIGNING_KEY}"
+	else
+		keyfile="_internal_priv.key"
+		echo "${SIGNING_KEY}" > "${keyfile}"
+	fi
+	openssl rsa -in "${keyfile}" -pubout -out $(dirname "${file}")/pubkey.pem
+	#Make sure we delete any temporary private key file
+	if [ "${keyfile}" = "_internal_priv.key" ] ; then
+		rm "${keyfile}"
+	fi
+	return 0
 }
 
 clean_iso_dir()
@@ -791,9 +969,11 @@ create_iso_dir()
 create_offline_update()
 {
 	local NAME="system-update.img"
-	if [ ! -d "release/update" ] ; then
-		mkdir -p release/update
+	if [ -d "release/update" ] ; then
+		#Remove old build artifacts
+		rm -r "release/update"
 	fi
+	mkdir -p release/update
 	echo "Creating ${NAME}..."
 	makefs release/update/${NAME} ${PKG_DISTDIR}
 	if [ $? -ne 0 ] ; then
@@ -818,6 +998,10 @@ create_offline_update()
 	fi
 	sha256 -q release/update/${NAME} > release/update/${NAME}.sha256
 	md5 -q release/update/${NAME} > release/update/${NAME}.md5
+
+	if [ $(jq -r '."iso"."generate-update-manifest"' ${TRUEOS_MANIFEST}) = "true" ] ; then
+		assemble_file_manifest "release/update"
+	fi
 }
 
 setup_iso_post() {
@@ -943,9 +1127,10 @@ apply_iso_config()
 
 mk_iso_file()
 {
-	if [ ! -d "release/iso" ] ; then
-		mkdir -p release/iso
+	if [ -d "release/iso" ] ; then
+		rm -rf release/iso
 	fi
+	mkdir -p release/iso
 	NAME="release/iso/install.iso"
 	sh scripts/mkisoimages.sh -b INSTALLER ${NAME} ${ISODIR} || exit_err "Unable to create ISO"
 
@@ -966,6 +1151,9 @@ mk_iso_file()
 	sha256 -q release/iso/${NAME} > release/iso/${NAME}.sha256
 	md5 -q release/iso/${NAME} > release/iso/${NAME}.md5
 	sign_file release/iso/${NAME}
+	if [ $(jq -r '."iso"."generate-manifest"' ${TRUEOS_MANIFEST}) = "true" ] ; then
+		assemble_file_manifest "release/iso"
+	fi
 }
 
 check_version()
@@ -1026,6 +1214,11 @@ get_world_flags()
 			WF="$WF ${i}"
 		done
 	done
+	arch="$(get_arch)"
+	if [ "${arch}" != "native" ]; then
+		WF="$WF TARGET_ARCH=${arch}"
+		WF="$WF TARGET=$(get_platform)"
+	fi
 	echo "$WF"
 }
 
@@ -1041,6 +1234,11 @@ get_kernel_flags()
 			KF="$KF ${i}"
 		done
 	done
+	arch="$(get_arch)"
+	if [ "${arch}" != "native" ]; then
+		KF="$KF TARGET_ARCH=${arch}"
+		KF="$KF TARGET=$(get_platform)"
+	fi
 	echo "$KF"
 }
 
@@ -1049,7 +1247,7 @@ select_manifest()
 	# TODO - Replace this with "dialog" time permitting
 	echo "Please select a default MANIFEST:"
 	COUNT=0
-	for i in $(ls manifests/)
+	for i in $(ls manifests/ | grep ".json")
 	do
 		echo "$COUNT) $i"
 		COUNT=$(expr $COUNT + 1)
@@ -1061,7 +1259,7 @@ select_manifest()
 		exit_err "Invalid option!"
 	fi
 	COUNT=0
-	for i in $(ls manifests/)
+	for i in $(ls manifests/ | grep ".json")
 	do
 		if [ $COUNT -eq $tmp ] ; then
 			MANIFEST=$i
@@ -1075,6 +1273,7 @@ select_manifest()
 		mkdir .config
 	fi
 	echo "$MANIFEST" > .config/manifest
+	echo "New Default Manifest: ${MANIFEST}"
 }
 
 load_vm_settings() {
@@ -1302,6 +1501,9 @@ do_vm_create() {
 	sha256 -q release/vm/${NAME} > release/vm/${NAME}.sha256
 	md5 -q release/vm/${NAME} > release/vm/${NAME}.md5
 	sign_file release/vm/${NAME}
+	if [ $(jq -r '."vm"."generate-manifest"' ${TRUEOS_MANIFEST}) = "true" ] ; then
+		assemble_file_manifest "release/vm"
+	fi
 }
 
 do_iso_create() {
@@ -1363,5 +1565,7 @@ case $1 in
 		;;
 	*) echo "Unknown option selected" ;;
 esac
+
+delete_tmp_manifest
 
 exit 0
