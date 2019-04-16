@@ -97,6 +97,7 @@
 				"WITHOUT_CHECK=YES",
 				"editors_jed_UNSET+=X11",
 				"databases_rrdtool_UNSET+=DEJAVU",
+				"databases_rrdtool_UNSET+=GRAPH",
 				"databases_rrdtool_UNSET+=PERL",
 				"databases_rrdtool_UNSET+=PYTHON",
 				"devel_dbus_UNSET+=X11",
