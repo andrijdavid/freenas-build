@@ -2,7 +2,6 @@
 	"base-packages": {
 		"kernel-flags": {
 			"default": [
-				"KERNCONF=IXNAS"
 			]
 		}
 	},
@@ -14,6 +13,7 @@
 		"auto-install-packages": {
 			"default": [
 				"freenas/freenas",
+				"os/kernel-debug",
 				"sysutils/zol"
 			]
 		},
@@ -81,8 +81,9 @@
 		"build": {
 			"default": [
 				"editors/emacs-nox11",
-				"os/kernel-debug",
-				"os/userland-debug"
+				"os/userland-debug",
+				"os/kernel-symbols",
+				"os/kernel-debug-symbols"
 			]
 		},
 		"build-all": false,
@@ -90,7 +91,9 @@
 		"make.conf": {
 			"default": [
 				"CRAZY=YES",
+				"DEBUGKERNCONF=IXNAS",
 				"DEFAULT_VERSIONS+=python=3.7 python3=3.7",
+				"KERNCONF=IXNAS-NODEBUG",
 				"MAKE_JOBS_NUMBER_LIMIT=3",
 				"NET_SNMP_WITHOUT_MIB_MODULE_LIST=sctp-mib",
 				"WANT_OPENLDAP_SASL=YES",
