@@ -91,9 +91,9 @@
 		"make.conf": {
 			"default": [
 				"CRAZY=YES",
-				"DEBUGKERNCONF=IXNAS",
+				"DEBUGKERNCONF=IXNAS-DEBUG",
 				"DEFAULT_VERSIONS+=python=3.7 python3=3.7",
-				"KERNCONF=IXNAS-NODEBUG",
+				"KERNCONF=IXNAS",
 				"MAKE_JOBS_NUMBER_LIMIT=3",
 				"NET_SNMP_WITHOUT_MIB_MODULE_LIST=sctp-mib",
 				"WANT_OPENLDAP_SASL=YES",
