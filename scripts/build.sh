@@ -328,6 +328,7 @@ is_ports_dirty()
 		return 1
 	fi
 
+	PDIR="$(poudriere ports -l 2>/dev/null | grep -w ${POUDRIERE_PORTS} | cut -w -f5)"
 	CURBRANCH=$(cd ${PDIR} 2>/dev/null && git branch | awk '{print $2}')
 	if [ -z "$CURBRANCH" ] ; then
 		echo "Unable to detect branch, checking out ports fresh"
@@ -341,6 +342,10 @@ is_ports_dirty()
 		echo -e "y\n" | poudriere ports -d -p ${POUDRIERE_PORTS}
 		return 1
 	fi
+
+	# Need to make sure ports is clean before updating, poudriere won't return non-0
+	# if it fails
+	(cd ${PDIR} && git reset --hard)
 
 	# Looks like we are safe to try an in-place upgrade
 	echo "Updating previous poudriere ports tree"
@@ -558,11 +563,6 @@ setup_poudriere_jail()
 
 	echo "Rebuilding ${POUDRIERE_BASE} jail"
 
-	# Nuke packages if we need to rebuild jail
-	if [ -d "${POUDRIERE_PKGDIR}" ] ; then
-		rm -r ${POUDRIERE_PKGDIR}/*
-	fi
-
 	# Clean out old logs
 	rm ${POUDRIERE_LOGDIR}/base-ports/*
 
@@ -587,10 +587,25 @@ setup_poudriere_jail()
 		exit 1
 	fi
 
-	# Save the options used for this build
+	# Get ABI of the new jail
+	NEWABI=$(cat ${POUDRIERE_JAILDIR}/usr/include/sys/param.h | grep '#define __FreeBSD_version' | awk '{print $3}')
+
+	# Nuke old packages if the ABI has changed
+	if [ -d "${POUDRIERE_PKGDIR}" -a "${POUDRIERE_PKGDIR}" != "/" ] ; then
+		if [ "$(cat ${POUDRIERE_PKGDIR}/os.abi 2>/dev/null)" != "${NEWABI}" ] ; then
+			rm -r ${POUDRIERE_PKGDIR}/*
+		fi
+	fi
+
+	# Make sure pkg directory exists
 	if [ ! -d "${POUDRIERE_PKGDIR}" ] ; then
 		mkdir -p ${POUDRIERE_PKGDIR}
 	fi
+
+	# Save the new ABI
+	echo "$NEWABI" > ${POUDRIERE_PKGDIR}/os.abi
+
+	# Save the options used for this build
 	get_kernel_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/buildkernel.options
 	get_world_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/buildworld.options
 	get_os_port_flags | tr -d ' ' > ${POUDRIERE_PKGDIR}/osport.options
@@ -1038,22 +1053,26 @@ EOF
 	chroot ${ISODIR} cap_mkdb /etc/login.conf
 	touch ${ISODIR}/etc/fstab
 
-	cp iso-files/rc ${ISODIR}/etc/
 	cp iso-files/rc.install ${ISODIR}/etc/
 	cp ${TRUEOS_MANIFEST} ${ISODIR}/root/trueos-manifest.json
 	cp ${TRUEOS_MANIFEST} ${ISODIR}/var/db/trueos-manifest.json
 
-	# Cleanup default runlevels
-	rm ${ISODIR}/etc/runlevels/boot/*
-	rm ${ISODIR}/etc/runlevels/default/*
-	for i in abi ldconfig localmount
-	do
-		ln -fs /etc/init.d/${i} ${ISODIR}/etc/runlevels/boot/${i}
-	done
-	for i in local
-	do
-		ln -fs /etc/init.d/${i} ${ISODIR}/etc/runlevels/default/${i}
-	done
+	# If we are using OpenRC, prep the ISO image
+	if [ -e "${ISODIR}/sbin/openrc" ] ; then
+		cp iso-files/openrc ${ISODIR}/etc/rc
+
+		# Cleanup default runlevels
+		rm ${ISODIR}/etc/runlevels/boot/*
+		rm ${ISODIR}/etc/runlevels/default/*
+		for i in abi ldconfig localmount
+		do
+			ln -fs /etc/init.d/${i} ${ISODIR}/etc/runlevels/boot/${i}
+		done
+		for i in local
+		do
+			ln -fs /etc/init.d/${i} ${ISODIR}/etc/runlevels/default/${i}
+		done
+	fi
 
 	# Check for conditionals packages to install
 	for c in $(jq -r '."iso"."iso-packages" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
