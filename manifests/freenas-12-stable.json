@@ -90,6 +90,7 @@
 		"local_source": "/usr/local_source",
 		"make.conf": {
 			"default": [
+				"BASEPKG_ABISTRING=FreeBSD:12:amd64",
 				"CRAZY=YES",
 				"DEBUGKERNCONF=IXNAS-DEBUG",
 				"DEFAULT_VERSIONS+=python=3.7 python3=3.7",
