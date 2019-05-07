@@ -193,7 +193,8 @@
 				"www_nginx_SET+=STATUS",
 				"www_node_UNSET+=DTRACE",
 				"www_py-ws4py_UNSET+=CHERRYPY",
-				"x11-toolkits_cairo_UNSET+=X11"
+				"www_py-ws4py_UNSET+=GEVENT",
+				"x11-toolkits_cairo_UNSET+=X11",
 				"x11-toolkits_pango_UNSET+=X11"
 			]
 		},
