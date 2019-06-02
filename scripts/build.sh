@@ -389,6 +389,17 @@ setup_poudriere_ports()
 		if [ $? -ne 0 ] ; then
 			exit_err "Failed copying manifest into ports -> ${POUDRIERE_PORTDIR}/local_source"
 		fi
+
+		# Copy manifest for buildworld port
+		if [ -d "${POUDRIERE_PORTDIR}/os/buildworld" ] ; then
+			if [ ! -d "${POUDRIERE_PORTDIR}/os/buildworld/files" ] ; then
+				mkdir -p ${POUDRIERE_PORTDIR}/os/buildworld/files
+			fi
+			cp ${TRUEOS_MANIFEST} ${POUDRIERE_PORTDIR}/os/buildworld/files/trueos-manifest.json
+			if [ $? -ne 0 ] ; then
+				exit_err "Failed copying manifest into ports -> ${POUDRIERE_PORTDIR}/os/buildworld/files/"
+			fi
+		fi
 	fi
 
 	# Add any list of files to strip from port plists
@@ -412,15 +423,8 @@ setup_poudriere_ports()
 	# Set the BUILD_EPOCH_TIME for ports that ingest, such as freenas
 	echo "BUILD_EPOCH_TIME=${BUILD_EPOCH_TIME}" >>${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
 
-	# See if a particular version of the base sources is specified
-	#  and ensure the base ports are all pointing to the right branch of the OS repo
-	if [ -e "${POUDRIERE_PORTDIR}/update-branch-os.sh" ] ; then
-		local os_branch=$(jq -r '."base-packages"."trueos-branch"' ${TRUEOS_MANIFEST})
-		if [ -n "${os_branch}" ] && [ "${os_branch}" != "null" ] ; then
-			echo "Adjusting TrueOS version branch: ${os_branch}"
-			(cd "${POUDRIERE_PORTDIR}" && ./update-branch-os.sh "os" "${os_branch}")
-		fi
-	fi
+	# Setup the OS sources for build
+	checkout_os_sources
 }
 
 create_poudriere_ports()
@@ -494,6 +498,31 @@ create_poudriere_ports()
 	fi
 }
 
+checkout_os_sources()
+{
+
+	# Checkout sources
+	GITREPO=$(jq -r '."base-packages"."repo"' ${TRUEOS_MANIFEST} 2>/dev/null)
+	GITBRANCH=$(jq -r '."base-packages"."branch"' ${TRUEOS_MANIFEST} 2>/dev/null)
+	if [ -z "${GITREPO}" -o -z "${GITBRANCH}" ] ; then
+		exit_err "Missing base-packages repo/branch"
+	fi
+
+	rm -rf tmp/os
+	git clone --depth=1 -b ${GITBRANCH} ${GITREPO} tmp/os
+	if [ $? -ne 0 ] ; then
+		exit_err "Failed checking out OS sources"
+	fi
+
+	if [ ! -e "tmp/os/sys/conf/package-version" ] ; then
+		# Get the date of these git sources for hard-coding OS version / timestamp
+		OSDATE=$(git -C tmp/os log -1 --date=format:'%Y%m%d%H%M%S' | grep "Date:" | awk '{print $2}')
+		echo "${OSDATE}" > tmp/os/sys/conf/package-version
+	fi
+
+	export BASEPKG_SRCDIR=$(pwd)/tmp/os
+}
+
 is_jail_dirty()
 {
 	poudriere jail -l | grep -q -w "${POUDRIERE_BASE}"
@@ -546,6 +575,11 @@ is_jail_dirty()
 	return 0
 }
 
+remove_basepkg_srcdir()
+{
+	unset BASEPKG_SRCDIR
+}
+
 # Checks if we have a new base ports jail to build, if so we will rebuild it
 setup_poudriere_jail()
 {
@@ -575,6 +609,13 @@ setup_poudriere_jail()
 		rm -rf /var/db/ports/os_buildkernel
 	fi
 
+	echo "Using source make.conf"
+	echo "----------------------------"
+	cat ${POUDRIERED_DIR}/${POUDRIERE_BASE}-make.conf
+
+	# Set alternative source location
+	sed -i '' "s|/usr/src|${BASEPKG_SRCDIR}|g" ${POUDRIERE_PORTDIR}/os/Makefile.common
+
 	export KERNEL_MAKE_FLAGS="$(get_kernel_flags)"
 	export WORLD_MAKE_FLAGS="$(get_world_flags)"
 	architecture="$(get_architecture)"
@@ -586,6 +627,7 @@ setup_poudriere_jail()
 	if [ $? -ne 0 ] ; then
 		exit 1
 	fi
+	sed -i '' "s|${BASEPKG_SRCDIR}|/usr/src|g" ${POUDRIERE_PORTDIR}/os/Makefile.common
 
 	# Get ABI of the new jail
 	NEWABI=$(cat ${POUDRIERE_JAILDIR}/usr/include/sys/param.h | grep '#define __FreeBSD_version' | awk '{print $3}')
@@ -685,7 +727,6 @@ build_poudriere()
 	fi
 	# Assemble the package manifests as needed
 	if [ $(jq -r '."ports"."generate-manifests"' ${TRUEOS_MANIFEST}) = "true" ] ; then
-		echo "Generating Package Manifests"
 		#Cleanup the output directory first
 		local mandir="release/pkg-manifests"
 		if [ -d "${mandir}" ] ; then
@@ -693,14 +734,14 @@ build_poudriere()
 		else
 			mkdir -p "${mandir}"
 		fi
+		echo "Generating Package Manifests in ${pwd}/${mandir}"
 		# Copy over the relevant files from the ports tree
-		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name MOVED)" ${mandir}/.
-		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name UPDATING)" ${mandir}/.
-		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name CHANGES)" ${mandir}/.
+		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name MOVED)" ${mandir}/MOVED
+		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name UPDATING)" ${mandir}/UPDATING
+		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name CHANGES)" ${mandir}/CHANGES
 		# Assemble a quick list of all the ports/packages that are available in the repo
 		mk_repo_config
 		pkg-static -R tmp/repo-config rquery -a "%o : %n : %v" > "${mandir}/pkg.list"
-
 	fi
 	return 0
 }
