@@ -3,7 +3,9 @@
 		"kernel-flags": {
 			"default": [
 			]
-		}
+		},
+		"branch":"freenas/12-stable",
+		"repo":"https://github.com/freenas/os"
 	},
 	"poudriere": {
 		"jailname": "freenas",
