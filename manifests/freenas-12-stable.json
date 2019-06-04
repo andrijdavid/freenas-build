@@ -15,7 +15,7 @@
 		"auto-install-packages": {
 			"default": [
 				"freenas/freenas",
-				"os/kernel-debug",
+				"os/kernel-debug@zol",
 				"sysutils/zol"
 			]
 		},
@@ -83,9 +83,11 @@
 		"build": {
 			"default": [
 				"editors/emacs-nox11",
-				"os/userland-debug",
-				"os/kernel-symbols",
-				"os/kernel-debug-symbols"
+				"os/userland-debug@zol",
+				"os/userland@zol",
+				"os/kernel@zol",
+				"os/kernel-symbols@zol",
+				"os/kernel-debug-symbols@zol"
 			]
 		},
 		"build-all": false,
