@@ -15,7 +15,6 @@
 		"auto-install-packages": {
 			"default": [
 				"freenas/freenas",
-				"os/kernel-debug@zol",
 				"sysutils/zol"
 			]
 		},
@@ -86,6 +85,7 @@
 				"os/userland-debug@zol",
 				"os/userland@zol",
 				"os/kernel@zol",
+				"os/kernel-debug@zol",
 				"os/kernel-symbols@zol",
 				"os/kernel-debug-symbols@zol"
 			]
