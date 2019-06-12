@@ -15,7 +15,7 @@
 		"auto-install-packages": {
 			"default": [
 				"freenas/freenas",
-				"sysutils/zol"
+				"sysutils/openzfs"
 			]
 		},
 		"auto-install-script": "",
@@ -82,12 +82,12 @@
 		"build": {
 			"default": [
 				"editors/emacs-nox11",
-				"os/userland-debug@zol",
-				"os/userland@zol",
-				"os/kernel@zol",
-				"os/kernel-debug@zol",
-				"os/kernel-symbols@zol",
-				"os/kernel-debug-symbols@zol"
+				"os/userland-debug@nozfs",
+				"os/userland@nozfs",
+				"os/kernel@nozfs",
+				"os/kernel-debug@nozfs",
+				"os/kernel-symbols@nozfs",
+				"os/kernel-debug-symbols@nozfs"
 			]
 		},
 		"build-all": false,
