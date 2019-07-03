@@ -122,6 +122,11 @@ POUDRIERE_LOGDIR="${POUDRIERE_BASEFS}/data/logs"
 POUDRIERE_PKGLOGS="${POUDRIERE_LOGDIR}/bulk/${POUDRIERE_BASE}-${POUDRIERE_PORTS}"
 POUDRIERED_DIR=/usr/local/etc/poudriere.d
 
+# Quick validation that the poudriere BASEFS directory exists
+if [ ! -d "${POUDRIERE_BASEFS}" ] ; then
+  mkdir -p "${POUDRIERE_BASEFS}"
+fi
+
 # Temp location for ISO files
 ISODIR="tmp/iso"
 
@@ -184,6 +189,9 @@ setup_poudriere_conf()
 	DISTFILES=$(grep "^DISTFILES_CACHE=" /usr/local/etc/poudriere.conf | head -n 1 | cut -d '=' -f 2)
 	if [ -z "${DISTFILES}" ] ; then
 		DISTFILES="${DEFAULT_DISTFILES}"
+	fi
+	if [ ! -d "${DISTFILES}" ] ; then
+		mkdir -p ${DISTFILES}
 	fi
 	_pdconf="${POUDRIERED_DIR}/${POUDRIERE_PORTS}-poudriere.conf"
 	_pdconf2="${POUDRIERED_DIR}/${POUDRIERE_BASE}-poudriere.conf"
@@ -308,7 +316,7 @@ assemble_file_manifest(){
 		# Also inject the date/time of the current build here
 		local _date=`date -ju "+%Y_%m_%d %H:%M %Z"`
 		local _date_secs=`date -j +%s`
-		manifest="${manifest}, \"build_date\" : \"${_date}\", \"build_date_time_t\" : \"${_date_secs}\""
+		manifest="${manifest}, \"build_date\" : \"${_date}\", \"build_date_time_t\" : \"${_date_secs}\", \"version\" : \"${TRUEOS_VERSION}\""
 		echo "{ ${manifest} }" > "${mfile}"
 		return 0
 	else
@@ -681,11 +689,6 @@ get_pkg_build_list()
 		done
 	done
 
-	# Get the explicit packages
-	echo 'os/userland' >> ${1}
-	echo 'os/kernel' >> ${1}
-	echo 'textproc/jq' >> ${1}
-
 	# Sort and remove dups
 	cat ${1} | sort -r | uniq > ${1}.new
 	mv ${1}.new ${1}
@@ -944,7 +947,26 @@ create_iso_dir()
 
 	export PKG_DBDIR="tmp/pkgdb"
 
-	BASE_PACKAGES="os/userland os/kernel ports-mgmt/pkg textproc/jq"
+	# Check for conditionals packages to install
+	for c in $(jq -r '."iso"."iso-base-packages" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
+	do
+		eval "CHECK=\$$c"
+		if [ -z "$CHECK" -a "$c" != "default" ] ; then continue; fi
+
+		# We have a conditional set of packages to include, lets do it
+		for i in $(jq -r '."iso"."iso-base-packages"."'$c'" | join(" ")' ${TRUEOS_MANIFEST})
+		do
+			BASE_PACKAGES="${BASE_PACKAGES} ${i}"
+		done
+	done
+
+	if [ -z "$BASE_PACKAGES" ] ; then
+		# No custom base packages specified, lets roll with the defaults
+		BASE_PACKAGES="os/userland os/kernel ports-mgmt/pkg"
+	else
+		# We always need pkg itself
+		BASE_PACKAGES="${BASE_PACKAGES} ports-mgmt/pkg"
+	fi
 
 	# Install the base packages into iso dir
 	for pkg in ${BASE_PACKAGES}
@@ -974,7 +996,7 @@ create_iso_dir()
 	# Check if we have dist-packages to include on the ISO
 	local _missingpkgs=""
 	# Note: Make sure that "prune-dist-packages" is always last in this list!!
-	for ptype in dist-packages auto-install-packages optional-dist-packages prune-dist-packages
+	for ptype in dist-packages auto-install-packages optional-dist-packages prune-dist-packages dist-packages-glob
 	do
 		for c in $(jq -r '."iso"."'${ptype}'" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
 		do
@@ -990,7 +1012,14 @@ create_iso_dir()
 						echo "Pruning image dist-file: $prune"
 						rm "${PKG_DISTDIR}/${prune}"
 					done
-					
+				elif [ "${ptype}" = "dist-packages-glob" ] ; then
+					echo "Fetching image dist-files for: $i"
+					pkg-static -o ABI_FILE=${POUDRIERE_JAILDIR}/bin/sh \
+						-R tmp/repo-config \
+						fetch -y -d -o ${PKG_DISTDIR} -g $i\*
+					if [ $? -ne 0 ] ; then
+						exit_err "Failed copying dist-package $i to ISO..."
+					fi
 				else
 					echo "Fetching image dist-files for: $i"
 					pkg-static -o ABI_FILE=${POUDRIERE_JAILDIR}/bin/sh \
@@ -1084,9 +1113,14 @@ install-repo: {
 }
 EOF
 	mkdir -p ${ISODIR}/install-pkg
+	mkdir -p ${ISODIR}/usr/home
 	mount_nullfs ${POUDRIERE_PKGDIR} ${ISODIR}/install-pkg
 	if [ $? -ne 0 ] ; then
 		exit_err "Failed mounting nullfs to ${ISODIR}/install-pkg"
+	fi
+	mount -t devfs devfs ${ISODIR}/dev
+	if [ $? -ne 0 ] ; then
+		exit_err "Failed mounting devfs to ${ISODIR}/dev"
 	fi
 
 	# Prep the new ISO environment
@@ -1138,6 +1172,7 @@ EOF
 	done
 
 	# Cleanup the ISO install packages
+	umount -f ${ISODIR}/dev
 	umount -f ${ISODIR}/install-pkg
 	rmdir ${ISODIR}/install-pkg
 	rm ${ISODIR}/etc/pkg/*
@@ -1159,6 +1194,11 @@ EOF
 
 prune_iso()
 {
+	# Nuke /rescue on image, its huge
+	rm -rf "${ISODIR}/rescue"
+	rm ${ISODIR}/usr/lib/*.a
+	rm ${ISODIR}/usr/local/lib/*.a
+
 	# User-specified pruning
 	# Check if we have paths to prune from the ISO before build
 	for c in $(jq -r '."iso"."prune" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
@@ -1365,7 +1405,11 @@ cleanup_md() {
 	if [ ! -e "/dev/${MDDEV}" ] ; then
 		return 0
 	fi
-	zpool export ${VMPOOLNAME}
+	if [ "${VMBOOT}" = "zfs" ] ; then
+		zpool export ${VMPOOLNAME}
+	else
+		umount -f $VMDIR
+	fi
 	mdconfig -d -u ${MDDEV}
 }
 
@@ -1413,7 +1457,26 @@ create_vm_dir()
 
 	mk_repo_config
 
-	BASE_PACKAGES="os/userland os/kernel ports-mgmt/pkg textproc/jq"
+	# Check for conditionals packages to install
+	for c in $(jq -r '."vm"."vm-base-packages" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
+	do
+		eval "CHECK=\$$c"
+		if [ -z "$CHECK" -a "$c" != "default" ] ; then continue; fi
+
+		# We have a conditional set of packages to include, lets do it
+		for i in $(jq -r '."iso"."vm-base-packages"."'$c'" | join(" ")' ${TRUEOS_MANIFEST})
+		do
+			BASE_PACKAGES="${BASE_PACKAGES} ${i}"
+		done
+	done
+
+	if [ -z "$BASE_PACKAGES" ] ; then
+		# No custom base packages specified, lets roll with the defaults
+		BASE_PACKAGES="os/userland os/kernel ports-mgmt/pkg"
+	else
+		# We always need pkg itself
+		BASE_PACKAGES="${BASE_PACKAGES} ports-mgmt/pkg"
+	fi
 
 	mkdir -p ${VMDIR}/tmp
 	mkdir -p ${VMDIR}/var/db/pkg
@@ -1441,7 +1504,7 @@ create_vm_dir()
 		pobj="iso"
 	fi
 	# - Now loop through the list
-	for ptype in auto-install-packages
+	for ptype in auto-install-packages auto-install-packages-glob
 	do
 		for c in $(jq -r '."'${pobj}'"."'${ptype}'" | keys[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
 		do
@@ -1477,6 +1540,12 @@ run_vm_post_install() {
 			echo "Stamping ZFS boot-loader"
 			echo "gpart bootcode -b ${VMDIR}/boot/pmbr -p ${VMDIR}/boot/gptzfsboot -i 1 ${MDDEV}"
 			gpart bootcode -b ${VMDIR}/boot/pmbr -p ${VMDIR}/boot/gptzfsboot -i 1 ${MDDEV} || exit_err "failed stamping boot!"
+			touch ${VMDIR}/boot/loader.conf
+			if [ -e "${VMDIR}/boot/modules/openzfs.ko" ] ; then
+				sysrc -f ${VMDIR}/boot/loader.conf openzfs_load=YES
+			else
+				sysrc -f ${VMDIR}/boot/loader.conf zfs_load=YES
+			fi
 			;;
 	esac
 
@@ -1501,8 +1570,9 @@ run_ec2_setup() {
 	ln -s /usr/local/etc/init.d/ec2_fetchkey ${VMDIR}/etc/runlevels/default/ec2_fetchkey
 	ln -s /usr/local/etc/init.d/ec2_loghostkey ${VMDIR}/etc/runlevels/default/ec2_loghostkey
 
-	# Enable service to grow ZFS boot volume
+	# Enable service to grow boot volume
 	ln -s /etc/init.d/growzfs ${VMDIR}/etc/runlevels/default/growzfs
+	ln -s /etc/init.d/growfs ${VMDIR}/etc/runlevels/default/growfs
 
 	# General EC2 setup
 	sysrc -f ${VMDIR}/etc/rc.conf ec2_fetchkey_user=root
@@ -1626,6 +1696,7 @@ case $1 in
 		   ;;
 	iso) env_check
 	     do_iso_create
+	     clean_iso_dir
 	     ;;
 	 vm) env_check
 	     do_vm_create

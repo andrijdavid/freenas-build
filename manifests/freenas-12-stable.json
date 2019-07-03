@@ -20,6 +20,12 @@
 		},
 		"auto-install-script": "",
 		"dist-packages": {},
+		"dist-packages-glob": {
+			"default": [
+				"os-nozfs-kernel",
+				"os-nozfs-userland"
+			]
+		},
 		"prune": {
 			"default": [
 				"METALOG",
@@ -45,8 +51,17 @@
 		},
 		"file-name": "FreeNAS-12-snapshot-x64-%%DATE%%",
 		"install-script": "",
+		"iso-base-packages": {
+			"default": [
+				"os-nozfs-userland",
+				"os-nozfs-kernel"
+			]
+		},
 		"iso-packages": {
-			"default": ["freenas/freenas-installer"]
+			"default": [
+				"freenas/freenas-installer",
+				"sysutils/openzfs"
+			]
 		},
 		"offline-update": true,
 		"overlay": {},
@@ -83,6 +98,7 @@
 			"default": [
 				"editors/emacs-nox11",
 				"os/userland-debug@nozfs",
+				"os/userland-devel@nozfs",
 				"os/userland@nozfs",
 				"os/kernel@nozfs",
 				"os/kernel-debug@nozfs",
