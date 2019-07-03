@@ -60,7 +60,8 @@
 		"iso-packages": {
 			"default": [
 				"freenas/freenas-installer",
-				"sysutils/openzfs"
+				"sysutils/openzfs",
+				"textproc/jq"
 			]
 		},
 		"offline-update": true,
