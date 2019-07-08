@@ -99,7 +99,7 @@
 			"default": [
 				"editors/emacs-nox11",
 				"os/userland-debug@nozfs",
-				"os/userland-devel@nozfs",
+				"os/userland-devtools@nozfs",
 				"os/userland@nozfs",
 				"os/kernel@nozfs",
 				"os/kernel-debug@nozfs",
