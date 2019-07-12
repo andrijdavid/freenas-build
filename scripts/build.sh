@@ -534,7 +534,7 @@ checkout_os_sources()
 is_jail_dirty()
 {
 	poudriere jail -l | grep -q -w "${POUDRIERE_BASE}"
-	if [ $? -ne 0 ] ; then
+	if [ $? -ne 0 ]  || [ ! -d "${POUDRIERE_JAILDIR}" ] ; then
 		return 1
 	fi
 
@@ -694,9 +694,25 @@ get_pkg_build_list()
 	mv ${1}.new ${1}
 }
 
+setup_ports_blacklist()
+{
+	# Setup the ports blacklist based on the options in the ${TRUEOS_MANIFEST}
+	local BLFile="${POUDRIERED_DIR}/${POUDRIERE_BASE}-blacklist"
+	# Re-initialize the blacklist file (delete it at the outset)
+	if [ -e "${BLFile}" ] ; then rm "${BLFile}" ; fi
+	# Now go through and re-add any ports from the manifest to the blacklist file
+	for origin in $(jq -r '."ports"."blacklist"[]' ${TRUEOS_MANIFEST} 2>/dev/null | tr -s '\n' ' ')
+	do
+		echo "${origin}" >> "${BLFile}"
+	done
+}
+
 # Start the poudriere build jobs
 build_poudriere()
 {
+	# First reset the ports blacklist
+	setup_ports_blacklist
+
 	# Check if we want to do a bulk build of everything
 	if [ $(jq -r '."ports"."build-all"' ${TRUEOS_MANIFEST}) = "true" ] ; then
 		# Start the build
@@ -744,6 +760,7 @@ build_poudriere()
 		cp "$(find ${POUDRIERE_PORTDIR} -maxdepth 3 -name CHANGES)" ${mandir}/CHANGES
 		# Assemble a quick list of all the ports/packages that are available in the repo
 		mk_repo_config
+		pkg-static -R tmp/repo-config update -y
 		pkg-static -R tmp/repo-config rquery -a "%o : %n : %v" > "${mandir}/pkg.list"
 	fi
 	return 0
@@ -784,6 +801,14 @@ super_clean_poudriere()
 				fi
 			fi
 		fi
+	done
+	#Now look for any leftover ZFS datasets for previous build jails
+	# These are typically left behind if something like a system reboot happens during a build
+	#  but poudriere does not know to scan/clean them before starting a new build
+	for jail_ds in `zfs list | grep -e "/poudriere/jails/${POUDRIERE_BASE}" | grep -E '(-ref/)[0-9]+' | cut -w -f 1`
+	do
+		echo "Removing stale package build dataset: ${jail_ds}"
+		zfs destroy -r "${jail_ds}"
 	done
 }
 
@@ -1399,6 +1424,10 @@ load_vm_settings() {
 		zfs) ;;
 		*) exit_err "Unknown vm.boot option!" ;;
 	esac
+	VMONDISKPOOL=$(jq -r '."vm"."pool-name"' ${TRUEOS_MANIFEST} 2>/dev/null)
+	if [ -z "${VMONDISKPOOL}" -o "$VMONDISKPOOL" = "null" ] ; then
+		VMONDISKPOOL="zroot"
+	fi
 }
 
 cleanup_md() {
@@ -1431,7 +1460,7 @@ create_vm_disk() {
 	trap cleanup_md SIGTERM
 	trap cleanup_md EXIT
 
-	sh vm-diskcfg/${VMCFG}.sh ${MDDEV} ${VMPOOLNAME}
+	sh vm-diskcfg/${VMCFG}.sh ${MDDEV} ${VMPOOLNAME} ${VMONDISKPOOL}
 	if [ $? -ne 0 ] ; then
 		cleanup_md
 		exit_err "Failed setting up disk for VM image"
@@ -1449,6 +1478,44 @@ clean_vm_dir() {
 		rm -rf vm-dir
 	fi
 	mkdir -p vm-dir
+}
+
+umount_altroot_pkgdir()
+{
+	local aroot="$1"
+	if [ -z "$aroot" ] ; then
+		exit_err "Missing altroot for mount"
+	fi
+
+	umount -f "${aroot}${POUDRIERE_PKGDIR}"
+	umount -f "${aroot}/dev"
+}
+
+
+mount_altroot_pkgdir()
+{
+	local aroot="$1"
+	if [ -z "$aroot" ] ; then
+		exit_err "Missing altroot for mount"
+	fi
+
+	# Check if target dir exists
+	if [ ! -d "${aroot}${POUDRIERE_PKGDIR}" ] ; then
+		mkdir -p "${aroot}${POUDRIERE_PKGDIR}"
+	fi
+
+	# Mount the dir now
+	mount -t nullfs ${POUDRIERE_PKGDIR} ${aroot}${POUDRIERE_PKGDIR}
+	if [ $? -ne 0 ] ; then
+		exit_err "Failed mounting pkgdir in altroot: ${aroot}${POUDRIERE_PKGDIR}"
+	fi
+
+	# Mount devfs
+	mount -t devfs devfs ${aroot}/dev
+	if [ $? -ne 0 ] ; then
+		exit_err "Failed mounting devfs in altroot: ${aroot}"
+	fi
+
 }
 
 create_vm_dir()
@@ -1496,13 +1563,22 @@ create_vm_dir()
 
 	done
 
+	unset PKG_DBDIR
+	mv ${VMDIR}/tmp/pkgdb/* ${VMDIR}/var/db/pkg/
+	rmdir ${VMDIR}/tmp/pkgdb
+
 	# Install the packages from JSON manifest
 	# - get whether to use the "iso" or "vm" parent object
+
 	local pobj="vm"
 	jq -e '."vm"."auto-install-packages"' ${TRUEOS_MANIFEST} 2>/dev/null
 	if [ $? -ne 0 ] ; then
 		pobj="iso"
 	fi
+
+	# Mount the Package Directory in the chroot
+	mount_altroot_pkgdir "${VMDIR}"
+
 	# - Now loop through the list
 	for ptype in auto-install-packages auto-install-packages-glob
 	do
@@ -1514,8 +1590,8 @@ create_vm_dir()
 			do
 				if [ -z "${i}" ] ; then continue; fi
 				echo "Installing: $i"
-				pkg-static -r ${VMDIR} -o ABI_FILE=${POUDRIERE_JAILDIR}/bin/sh \
-					-R tmp/repo-config \
+				pkg-static -c ${VMDIR} -o ABI_FILE=/bin/sh \
+					-R /tmp/repo-config \
 					install -y ${i}
 				if [ $? -ne 0 ] ; then
 					exit_err "Failed installing $i to VM..."
@@ -1523,9 +1599,7 @@ create_vm_dir()
 			done
 		done
 	done
-	unset PKG_DBDIR
-	mv ${VMDIR}/tmp/pkgdb/* ${VMDIR}/var/db/pkg/
-	rmdir ${VMDIR}/tmp/pkgdb
+	umount_altroot_pkgdir "${VMDIR}"
 }
 
 run_vm_post_install() {
