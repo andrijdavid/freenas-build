@@ -97,14 +97,17 @@
 		"branch": "freenas/12-stable",
 		"build": {
 			"default": [
+				"devel/kyua",	
 				"editors/emacs-nox11",
 				"os/userland-debug@nozfs",
 				"os/userland-devtools@nozfs",
+				"os/userland-tests@nozfs",
 				"os/userland@nozfs",
 				"os/kernel@nozfs",
 				"os/kernel-debug@nozfs",
 				"os/kernel-symbols@nozfs",
-				"os/kernel-debug-symbols@nozfs"
+				"os/kernel-debug-symbols@nozfs",
+				"shells/ksh93"
 			]
 		},
 		"build-all": false,
